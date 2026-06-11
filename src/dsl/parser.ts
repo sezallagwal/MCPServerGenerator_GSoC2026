@@ -1,118 +1,23 @@
 import { DslScanner } from "./scanner.js";
 import {
+  VALID_PARAM_TYPES,
+  VALID_STEP_TYPES,
+  VALID_WEBHOOK_METHODS,
+} from "./constants.js";
+import {
   DslParseError,
   type DslStep,
   type DslWebhook,
   type DslWorkflow,
   type ParseDslResult,
 } from "./types.js";
-
-const VALID_STEP_TYPES = [
-  "api_call",
-  "sampling",
-  "elicitation",
-  "transform",
-  "conditional",
-] as const;
-
-const VALID_PARAM_TYPES = [
-  "string",
-  "number",
-  "boolean",
-  "object",
-  "array",
-] as const;
-
-const VALID_WEBHOOK_METHODS = ["get", "post"] as const;
-
-function isBlockBoundary(line: string): boolean {
-  return (
-    line.startsWith("STEP ") ||
-    line.startsWith("WORKFLOW ") ||
-    line.startsWith("PROJECT ") ||
-    line.startsWith("WEBHOOK ")
-  );
-}
-
-function isWorkflowBoundary(line: string): boolean {
-  return (
-    line.startsWith("WORKFLOW ") ||
-    line.startsWith("PROJECT ") ||
-    line.startsWith("WEBHOOK ")
-  );
-}
-
-function parseValue(raw: string): unknown {
-  const trimmed = raw.trim();
-  if (trimmed === "") return "";
-
-  if (trimmed === "true") return true;
-  if (trimmed === "false") return false;
-
-  // Keep template expressions like {{params.count}} as strings.
-  if (/^-?\d+(\.\d+)?$/.test(trimmed) && !trimmed.includes("{{")) {
-    return Number(trimmed);
-  }
-
-  if (
-    (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
-    (trimmed.startsWith("[") && trimmed.endsWith("]"))
-  ) {
-    try {
-      return JSON.parse(trimmed);
-    } catch {
-      // MAP values that look like JSON can still be plain strings.
-    }
-  }
-
-  return trimmed;
-}
-
-function buildDotPath(
-  dotPath: string,
-  value: unknown,
-): Record<string, unknown> {
-  const segments = dotPath.split(".");
-  if (segments.length === 1) {
-    return { [segments[0]]: value };
-  }
-
-  const result: Record<string, unknown> = {};
-  let current = result;
-  for (let i = 0; i < segments.length - 1; i++) {
-    const next: Record<string, unknown> = {};
-    current[segments[i]] = next;
-    current = next;
-  }
-  current[segments[segments.length - 1]] = value;
-  return result;
-}
-
-// Mutates target; arrays are replaced instead of merged.
-function deepMerge(
-  a: Record<string, unknown>,
-  b: Record<string, unknown>,
-): Record<string, unknown> {
-  for (const [key, bVal] of Object.entries(b)) {
-    const aVal = a[key];
-    if (
-      aVal &&
-      typeof aVal === "object" &&
-      !Array.isArray(aVal) &&
-      bVal &&
-      typeof bVal === "object" &&
-      !Array.isArray(bVal)
-    ) {
-      deepMerge(
-        aVal as Record<string, unknown>,
-        bVal as Record<string, unknown>,
-      );
-    } else {
-      a[key] = bVal;
-    }
-  }
-  return a;
-}
+import {
+  buildDotPath,
+  deepMerge,
+  isBlockBoundary,
+  isWorkflowBoundary,
+  parseValue,
+} from "./utils.js";
 
 function parseStep(scanner: DslScanner): DslStep {
   const headerLineNumber = scanner.lineNumber;
@@ -398,7 +303,14 @@ function parseStep(scanner: DslScanner): DslStep {
     }
 
     if (line.startsWith("ON_DECLINE ")) {
-      step.onDecline = line.slice("ON_DECLINE ".length).trim();
+      const val = line.slice("ON_DECLINE ".length).trim();
+      if (val !== "abort" && val !== "skip_remaining") {
+        throw new DslParseError(
+          lineNumber,
+          `ON_DECLINE must be "abort" or "skip_remaining", got "${val}"`,
+        );
+      }
+      step.onDecline = val;
       continue;
     }
 
@@ -506,6 +418,16 @@ function parseWorkflow(scanner: DslScanner): DslWorkflow {
 
     if (isWorkflowBoundary(next)) break;
 
+    const lineNumber = scanner.lineNumber;
+
+    if (next === "STEP") {
+      scanner.consumeLine();
+      throw new DslParseError(
+        lineNumber,
+        'STEP requires format "STEP id : type"',
+      );
+    }
+
     if (next.startsWith("STEP ")) {
       const stepStartLine = scanner.lineNumber;
       const step = parseStep(scanner);
@@ -520,8 +442,6 @@ function parseWorkflow(scanner: DslScanner): DslWorkflow {
       workflow.steps.push(step);
       continue;
     }
-
-    const lineNumber = scanner.lineNumber;
 
     if (next.startsWith("DESCRIPTION ")) {
       scanner.consumeLine();
@@ -676,14 +596,26 @@ function parseWebhook(scanner: DslScanner): DslWebhook {
     );
   }
 
+  if (webhook.methods.length === 0) {
+    throw new DslParseError(
+      headerLineNumber,
+      `WEBHOOK "${path}" requires at least one method (METHODS get post)`,
+    );
+  }
+
   return webhook;
 }
 
+/**
+ * Parses a DSL string into a structured workflow definition.
+ * @throws {DslParseError} on invalid input with line-number context.
+ */
 export function parseDsl(dsl: string): ParseDslResult {
   const scanner = new DslScanner(dsl);
   let projectName: string | undefined;
   let projectDescription: string | undefined;
   const workflows: DslWorkflow[] = [];
+  const workflowNames = new Set<string>();
   const webhooks: DslWebhook[] = [];
 
   while (!scanner.isEof()) {
@@ -713,13 +645,13 @@ export function parseDsl(dsl: string): ParseDslResult {
 
     if (line.startsWith("WORKFLOW ")) {
       const workflow = parseWorkflow(scanner);
-      const duplicate = workflows.find((w) => w.name === workflow.name);
-      if (duplicate) {
+      if (workflowNames.has(workflow.name)) {
         throw new DslParseError(
           lineNumber,
           `Duplicate WORKFLOW name "${workflow.name}"`,
         );
       }
+      workflowNames.add(workflow.name);
       workflows.push(workflow);
       continue;
     }
@@ -727,6 +659,14 @@ export function parseDsl(dsl: string): ParseDslResult {
     if (line.startsWith("WEBHOOK ")) {
       webhooks.push(parseWebhook(scanner));
       continue;
+    }
+
+    if (line === "WEBHOOK") {
+      throw new DslParseError(lineNumber, "WEBHOOK requires a path");
+    }
+
+    if (line === "WORKFLOW") {
+      throw new DslParseError(lineNumber, "WORKFLOW requires a name");
     }
 
     scanner.consumeLine();

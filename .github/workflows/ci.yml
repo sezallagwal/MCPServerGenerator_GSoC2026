@@ -39,8 +39,11 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Run tests
-        run: npm run test
+      - name: Run unit tests
+        run: npm run test:unit
+
+      - name: Run smoke tests
+        run: npm run test:smoke
 
       - name: Build
         run: npm run build

@@ -1,3 +1,4 @@
+/** Top-level result of parsing a complete DSL document. */
 export interface ParseDslResult {
   projectName: string;
   description: string;
@@ -5,11 +6,13 @@ export interface ParseDslResult {
   webhookEndpoints?: DslWebhook[];
 }
 
+/** Schema definition for workflow input parameters. */
 export interface DslWorkflowParams {
   type: "object";
   properties: Record<string, { type: string; description?: string }>;
 }
 
+/** A named workflow containing steps, optional params, and a description. */
 export interface DslWorkflow {
   name: string;
   description: string;
@@ -17,6 +20,7 @@ export interface DslWorkflow {
   steps: DslStep[];
 }
 
+/** A single execution step within a workflow. */
 export interface DslStep {
   id: string;
   label?: string;
@@ -40,10 +44,11 @@ export interface DslStep {
   elseStep?: string;
   message?: string;
   requestedSchema?: Record<string, unknown>;
-  onDecline?: string;
+  onDecline?: "abort" | "skip_remaining";
   continueOnError?: boolean;
 }
 
+/** An HTTP webhook endpoint declaration. */
 export interface DslWebhook {
   path: string;
   description: string;

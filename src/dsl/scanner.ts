@@ -5,7 +5,7 @@ export class DslScanner {
   private pos = 0;
 
   constructor(dsl: string) {
-    this.lines = dsl.split("\n");
+    this.lines = dsl.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
   }
 
   get lineNumber(): number {
