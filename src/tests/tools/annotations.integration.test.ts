@@ -2,8 +2,8 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { SpecParser, VALID_DOMAINS } from "../../parser/index.js";
 import {
-  DOMAIN_NOTES,
-  ENDPOINT_ANNOTATIONS,
+  ROCKETCHAT_DOMAIN_NOTES as DOMAIN_NOTES,
+  ROCKETCHAT_ENDPOINT_ANNOTATIONS as ENDPOINT_ANNOTATIONS,
 } from "../../tools/capability-guide.js";
 
 describe("capability guide annotations", () => {

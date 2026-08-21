@@ -2,6 +2,7 @@
 import { resolveOperationId } from "../utils/resolve-operation-id.js";
 import {
   extractCompactEndpoints,
+  extractEndpointByLocation,
   extractFullEndpoints,
 } from "./endpoint-extraction.js";
 import { OpenApiSpecSource } from "./spec-source.js";
@@ -10,6 +11,7 @@ import type {
   Domain,
   FullEndpoint,
   GetFullEndpointsResult,
+  OperationLocation,
   SpecParserInterface,
   SpecParserOptions,
   SpecSource,
@@ -89,9 +91,23 @@ export function resolveMissingOperationIds(
   return { additionalEndpoints, correctedIds };
 }
 
+/** Checked rather than cast: an unknown domain is a caller mistake worth naming. */
+export function assertDomains(domains: readonly string[]): Domain[] {
+  const narrowed: Domain[] = [];
+  for (const domain of domains) {
+    if (!VALID_DOMAINS.includes(domain as Domain)) {
+      throw new ParserError(
+        `Invalid domain: "${domain}". Valid domains: ${VALID_DOMAINS.join(", ")}`,
+      );
+    }
+    narrowed.push(domain as Domain);
+  }
+  return narrowed;
+}
+
 export class SpecParser implements SpecParserInterface {
   private specSource: SpecSource;
-  private domainIndex = new Map<string, Domain>();
+  private domainIndex = new Map<string, OperationLocation>();
 
   constructor(options: SpecParserOptions = {}) {
     this.specSource =
@@ -103,14 +119,10 @@ export class SpecParser implements SpecParserInterface {
       });
   }
 
-  async listEndpoints(domains: readonly Domain[]): Promise<CompactEndpoint[]> {
-    for (const domain of domains) {
-      if (!VALID_DOMAINS.includes(domain)) {
-        throw new ParserError(
-          `Invalid domain: "${domain}". Valid domains: ${VALID_DOMAINS.join(", ")}`,
-        );
-      }
-    }
+  async listEndpoints(
+    requested: readonly string[],
+  ): Promise<CompactEndpoint[]> {
+    const domains = assertDomains(requested);
 
     const specs = await Promise.all(
       domains.map((d) => this.specSource.getSpec(d)),
@@ -119,8 +131,13 @@ export class SpecParser implements SpecParserInterface {
     const results: CompactEndpoint[] = [];
     for (let i = 0; i < domains.length; i++) {
       const extracted = extractCompactEndpoints(specs[i], domains[i]);
-      for (const ep of extracted)
-        this.domainIndex.set(ep.operationId, ep.domain);
+      for (const ep of extracted) {
+        this.domainIndex.set(ep.operationId, {
+          domain: ep.domain,
+          path: ep.path,
+          method: ep.method,
+        });
+      }
       results.push(...extracted);
     }
 
@@ -129,63 +146,94 @@ export class SpecParser implements SpecParserInterface {
 
   async getFullEndpoints(
     operationIds: string[],
-    domains?: Domain[],
+    requestedDomains?: readonly string[],
     maxDepth?: number,
   ): Promise<GetFullEndpointsResult> {
+    const domains =
+      requestedDomains === undefined
+        ? undefined
+        : assertDomains(requestedDomains);
     const correctedIds = new Map<string, string>();
     if (operationIds.length === 0) {
       return { endpoints: [], correctedIds };
     }
 
-    let domainsToSearch: readonly Domain[];
-    if (domains) {
-      domainsToSearch = domains;
-    } else if (this.domainIndex.size > 0) {
-      const indexed = new Set<Domain>();
-      let hasUnknown = false;
-      for (const id of operationIds) {
-        const d = this.domainIndex.get(id);
-        if (d) indexed.add(d);
-        else hasUnknown = true;
-      }
-      domainsToSearch = hasUnknown ? VALID_DOMAINS : [...indexed];
-    } else {
-      domainsToSearch = VALID_DOMAINS;
-    }
     const idSet = new Set(operationIds);
-
-    const specs = await Promise.all(
-      domainsToSearch.map((d) => this.specSource.getSpec(d)),
-    );
-
     const results: FullEndpoint[] = [];
     const resultIds = new Set<string>();
-    for (let i = 0; i < domainsToSearch.length; i++) {
-      const extracted = extractFullEndpoints(
-        specs[i],
-        domainsToSearch[i],
-        idSet,
+    const unindexedIds = new Set<string>();
+    const specCache = new Map<Domain, OpenAPIV3.Document>();
+
+    for (const id of idSet) {
+      const loc = this.domainIndex.get(id);
+      if (!loc) {
+        unindexedIds.add(id);
+        continue;
+      }
+      if (domains && !domains.includes(loc.domain)) continue;
+
+      let spec = specCache.get(loc.domain);
+      if (!spec) {
+        spec = await this.specSource.getSpec(loc.domain);
+        specCache.set(loc.domain, spec);
+      }
+
+      const ep = extractEndpointByLocation(
+        spec,
+        loc.domain,
+        id,
+        loc.path,
+        loc.method,
         maxDepth,
       );
-      results.push(...extracted);
-      for (const ep of extracted) {
-        idSet.delete(ep.operationId);
+      if (ep) {
+        results.push(ep);
         resultIds.add(ep.operationId);
+      } else {
+        unindexedIds.add(id);
       }
-      if (idSet.size === 0) break;
     }
 
-    if (idSet.size > 0) {
-      const fuzzyResult = resolveMissingOperationIds({
-        missingIds: idSet,
-        domainsToSearch,
-        specs,
-        resultIds,
-        maxDepth,
-      });
-      results.push(...fuzzyResult.additionalEndpoints);
-      for (const [requestedId, actualId] of fuzzyResult.correctedIds) {
-        correctedIds.set(requestedId, actualId);
+    if (unindexedIds.size > 0) {
+      const domainsToSearch: readonly Domain[] = domains ?? VALID_DOMAINS;
+      const specs: OpenAPIV3.Document[] = [];
+      for (const domain of domainsToSearch) {
+        let spec = specCache.get(domain);
+        if (!spec) {
+          spec = await this.specSource.getSpec(domain);
+          specCache.set(domain, spec);
+        }
+        specs.push(spec);
+      }
+
+      for (let i = 0; i < domainsToSearch.length; i++) {
+        const extracted = extractFullEndpoints(
+          specs[i],
+          domainsToSearch[i],
+          unindexedIds,
+          maxDepth,
+        );
+        for (const ep of extracted) {
+          if (resultIds.has(ep.operationId)) continue;
+          results.push(ep);
+          resultIds.add(ep.operationId);
+          unindexedIds.delete(ep.operationId);
+        }
+        if (unindexedIds.size === 0) break;
+      }
+
+      if (unindexedIds.size > 0) {
+        const fuzzyResult = resolveMissingOperationIds({
+          missingIds: unindexedIds,
+          domainsToSearch,
+          specs,
+          resultIds,
+          maxDepth,
+        });
+        results.push(...fuzzyResult.additionalEndpoints);
+        for (const [requestedId, actualId] of fuzzyResult.correctedIds) {
+          correctedIds.set(requestedId, actualId);
+        }
       }
     }
 

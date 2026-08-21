@@ -1,15 +1,24 @@
 import { formatCapabilityGuide } from "./capability-guide.js";
+import type { CapabilityGuideHints } from "./capability-guide.js";
 import type { CapabilityGuideSource } from "../parser/index.js";
 
-export async function handleGetCapabilityGuide(parser: CapabilityGuideSource) {
+/** Hints are optional: an unannotated guide is the right output for a quirk-free platform. */
+type GuideSource = CapabilityGuideSource & {
+  capabilityGuideHints?(): CapabilityGuideHints;
+};
+
+export async function handleGetCapabilityGuide(source: GuideSource) {
   try {
-    const endpoints = await parser.listEndpoints(parser.getAvailableDomains());
-    const guide = formatCapabilityGuide(endpoints);
+    const endpoints = await source.listEndpoints(source.getAvailableDomains());
+    const guide = formatCapabilityGuide(
+      endpoints,
+      source.capabilityGuideHints?.() ?? {},
+    );
     return {
       content: [{ type: "text" as const, text: guide }],
     };
   } catch (err) {
-    const domains = parser.getAvailableDomains();
+    const domains = source.getAvailableDomains();
     return {
       content: [
         {

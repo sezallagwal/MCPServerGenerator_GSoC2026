@@ -93,26 +93,13 @@ const ALLOWED_GLOBALS = new Set([
 
 const BLOCKED_PROPERTIES = new Set(["__proto__", "constructor", "prototype"]);
 
-/**
- * Maximum AST nesting depth accepted by {@link validateSafeExpression}.
- *
- * `validateNode` is recursive, so a pathologically nested expression could in
- * principle exhaust the call stack. The surrounding try/catch already converts
- * any overflow into a rejection, but V8's stack limit is platform-dependent —
- * this explicit, deterministic bound makes the rejection point predictable and
- * yields a clear message instead of "Maximum call stack size exceeded". The
- * limit is far above any realistic hand- or AI-authored expression.
- */
+/** Explicit bound so deep nesting fails predictably, not with a platform-dependent overflow. */
 const MAX_AST_DEPTH = 500;
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Acorn nodes are inspected structurally by node type.
 type Node = Record<string, any>;
 
-/**
- * Reject expressions nested deeper than {@link MAX_AST_DEPTH}. Uses an explicit
- * work stack (no recursion) so the guard itself cannot overflow, and skips
- * acorn's positional bookkeeping keys so only structural nesting counts.
- */
+/** An explicit work stack, so the guard itself cannot overflow. */
 function assertBoundedDepth(ast: Node): void {
   const stack: Array<{ node: unknown; depth: number }> = [
     { node: ast, depth: 0 },

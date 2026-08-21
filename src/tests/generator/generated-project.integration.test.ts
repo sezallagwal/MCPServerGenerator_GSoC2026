@@ -7,16 +7,8 @@ import { generateFromDsl } from "../../generator/pipeline.js";
 import type { GeneratedFile } from "../../generator/types.js";
 
 /**
- * End-to-end quality gates for a *generated* project — the strongest signal
- * that codegen is healthy:
- *
- *   1. The whole project is valid TypeScript (`tsc --noEmit`).
- *   2. The generated `npm test` suite actually runs and passes.
- *
- * We write a full project to a temp dir under the repo root; dependency and
- * `@types` resolution walks up to this repo's `node_modules`, so no install
- * step is needed. The DSL exercises every step type (api_call, sampling with
- * multimodal CONTENT_*, elicitation, transform, conditional) plus forEach.
+ * `tsc --noEmit` plus the generated `npm test`, over a project written under the repo root
+ * so dependency resolution walks up to this repo's `node_modules`.
  */
 const DSL = `
 PROJECT generated_quality

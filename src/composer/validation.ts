@@ -315,24 +315,12 @@ const STEP_OUTPUT_TYPES: Record<StepConfig["type"], StepOutputType> = {
   transform: "unknown",
 };
 
-/**
- * True when a sampling step is meant to yield structured JSON — either because it
- * explicitly declares `responseFormat: "json"` or because its prompt/systemPrompt
- * signal JSON intent. This mirrors the runtime decision (the sampling executor
- * JSON-parses the model output under the same condition), so compose-time
- * validation and execution agree on whether field access is meaningful.
- */
+/** Mirrors the runtime decision, so compose-time validation and execution cannot disagree. */
 function isJsonModeSampling(cfg: SamplingStep): boolean {
   return cfg.responseFormat === "json" || detectJsonIntent(cfg);
 }
 
-/**
- * Resolve a step's effective output type. Sampling is special: its result is a
- * plain text string unless the step is in JSON mode, in which case the runtime
- * parses it into an object. Field access is only valid against the object form,
- * so a plain-text sampling result reports "string" and is rejected by the
- * data-flow guard below.
- */
+/** Sampling yields a string unless in JSON mode, and field access is only valid on an object. */
 function resolveStepOutputType(config: StepConfig): StepOutputType {
   if (config.type === "sampling") {
     return isJsonModeSampling(config) ? "object" : "string";
@@ -395,20 +383,8 @@ export function validateSafeWorkflowExpressions(
 }
 
 /**
- * Auto-infer a `responseSchema` for JSON-mode sampling steps from the way
- * downstream steps access their result.
- *
- * When a later step reads `steps.<sampling>.<field>` (dot or bracket notation),
- * the field name — and a coarse type inferred from how it is used — is recorded
- * on the sampling step's `responseSchema`. This makes the structured shape the
- * workflow depends on explicit instead of implicit, and lets the runtime/provider
- * steer the model toward returning those fields. A `SAMPLING_SCHEMA_MISMATCH`
- * warning is emitted when a consumed field is never mentioned in the prompt, since
- * the model is then unlikely to produce it.
- *
- * Only JSON-mode sampling steps are considered (see {@link isJsonModeSampling});
- * plain-text sampling steps that are field-accessed are rejected earlier by
- * {@link validateDataFlowTypes}.
+ * Record the fields downstream steps read off a JSON-mode sampling result, so the shape is
+ * explicit and the provider can be steered toward it. Warns when one is never prompted for.
  */
 export function inferSamplingResponseSchemas(
   steps: ComposeStepInput[],
@@ -427,8 +403,7 @@ export function inferSamplingResponseSchemas(
   const fieldAccesses = new Map<string, Map<string, string>>();
   for (const id of jsonSamplingIds) fieldAccesses.set(id, new Map());
 
-  // Dot access: steps.X.field or steps.X?.field, optionally followed by a
-  // usage hint (=== bool, .join/.map/.filter/.length) we use to guess the type.
+  // steps.X.field, plus a usage hint (=== bool, .join/.map/.length) used to guess the type.
   const FIELD_CONTEXT_RE =
     /steps\.(\w+)\??\.(\w+)\s*(?:===\s*(true|false)|\.join\b|\.map\b|\.filter\b|\.length\b|\.includes\b)?/g;
   // Bracket access: steps.X["field"] or steps.X?.["field"]

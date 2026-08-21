@@ -6,11 +6,7 @@ import type {
 } from "../composer/types.js";
 import type { StepConfig } from "../workflow/types.js";
 
-/**
- * Bridge the flat DSL step shape produced by the parser into the discriminated
- * `StepConfig` union the composer consumes. This is the seam between the DSL
- * front end and the workflow model.
- */
+/** The seam from the parser's flat DSL step to the composer's discriminated `StepConfig`. */
 function stepConfig(step: DslStep): StepConfig {
   switch (step.type) {
     case "api_call":

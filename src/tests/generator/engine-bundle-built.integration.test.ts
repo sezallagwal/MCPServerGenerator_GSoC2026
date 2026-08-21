@@ -5,12 +5,7 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-/**
- * Smoke test proving `generate` works from the BUILT package, not just from
- * source. `engine-bundle` reads the engine `.ts` sources at runtime; `tsc`
- * emits only `.js`, so this exercises the build's engine-source copy step and
- * the built module's path resolution end to end.
- */
+/** `generate` from the BUILT package: `tsc` emits only `.js`, so the copy step has to work. */
 
 const repoRoot = join(
   dirname(fileURLToPath(import.meta.url)),

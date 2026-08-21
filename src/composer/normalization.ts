@@ -49,13 +49,7 @@ export function normalizeEventParamShorthand(
   const paramProps = params.properties ? Object.keys(params.properties) : [];
   if (paramProps.length === 0) return warnings;
 
-  // Reserve every forEach loop-variable name so it is never rewritten as an
-  // event param. A name that is declared as a `forEach ... as <alias>` always
-  // wins over a same-named param: references to it are loop variables, not
-  // params. Reserving them globally (rather than per-step) is deliberate — it
-  // guarantees an out-of-scope alias reference cannot be silently "rescued"
-  // into a `params.*` reference here, so it still reaches the scope check in
-  // normalizeTemplateFields and fails there instead of resolving to empty.
+  // Reserved globally, so an out-of-scope alias reaches the scope check instead of resolving here.
   const forEachAsVars = new Set<string>();
   for (const step of steps) {
     if (step.config.type === "api_call" && (step.config as ApiCallStep).as) {
@@ -290,8 +284,7 @@ function convertHandlebarsBlocks(
       );
     }
 
-    // Split body into static parts and dynamic {{this.X}} / {{this}} references
-    // Build: collection.map(item => "static" + (item.field ?? "") + "static").join("")
+    // Static parts and dynamic {{this.X}} refs, built into a .map(...).join("").
     const parts: string[] = [];
     let lastIndex = 0;
     const refRe = /\{\{this(?:\.(\w+(?:\.\w+)*))?\}\}/g;
@@ -340,8 +333,7 @@ function convertHandlebarsBlocks(
     return expr;
   });
 
-  // Convert {{#if cond}}...then...{{else}}...else...{{/if}}
-  // and {{#if cond}}...then...{{/if}}
+  // Handles {{#if cond}}...{{else}}...{{/if}} and the else-less form.
   const ifElseRe =
     /\{\{#if\s+([^}]+)\}\}([\s\S]*?)\{\{else\}\}([\s\S]*?)\{\{\/if\}\}/g;
   result = result.replace(
@@ -395,13 +387,7 @@ export function normalizeTemplateFields(
 ): ComposerWarning[] {
   const warnings: ComposerWarning[] = [];
 
-  // A `forEach ... as <alias>` declaration introduces a per-iteration loop
-  // variable. That variable ONLY exists while its owning step iterates, so it
-  // is only valid inside that step's own `inputMapping`. It must never leak
-  // into sibling/downstream steps: at runtime the alias is undefined there and
-  // silently resolves to empty. We therefore track every alias together with
-  // the id(s) of the step(s) that own it, so out-of-scope references can be
-  // rejected instead of blindly rewritten.
+  // An alias exists only while its owning step iterates, so track which step owns it.
   const aliasNames = new Set<string>();
   const aliasOwners = new Map<string, string[]>();
   for (const step of steps) {
@@ -414,9 +400,7 @@ export function normalizeTemplateFields(
     }
   }
 
-  // `scopedAlias` is the loop variable that is legal to reference in the field
-  // currently being normalized (undefined when no alias is in scope). Only the
-  // owning step's `inputMapping` passes a defined value.
+  // The alias legal in the field being normalized; only the owning inputMapping sets it.
   function normalizeString(
     stepId: string,
     value: string,
@@ -441,11 +425,7 @@ export function normalizeTemplateFields(
       result = wrapped;
     }
 
-    // forEach alias handling — strictly scoped to the owning step's inputMapping.
-    // Inside that scope the shorthand `{{alias.field}}` is rewritten to the
-    // canonical `{{steps.alias.field}}`. Anywhere else, a reference to a known
-    // alias is a scope violation and fails composition, because it would
-    // resolve to an empty value at runtime.
+    // In scope, `{{alias.field}}` becomes `{{steps.alias.field}}`; out of scope it fails.
     for (const alias of aliasNames) {
       const asRefRe = new RegExp(
         `\\{\\{${alias}\\.(\\w+(?:\\.\\w+)*)\\}\\}`,
@@ -569,8 +549,7 @@ export function normalizeTemplateFields(
           ) as Record<string, unknown>;
         }
         if (apiCfg.forEach) {
-          // `forEach` is the collection expression, evaluated before iteration
-          // begins — the loop alias does not exist yet, so it is NOT in scope here.
+          // `forEach` is evaluated before iteration, so the alias is not yet in scope.
           apiCfg.forEach = normalizeString(step.id, apiCfg.forEach, "forEach");
         }
         break;
@@ -599,8 +578,7 @@ export function normalizeTemplateFields(
         eCfg.message = normalizeString(step.id, eCfg.message, "message");
         break;
       }
-      // transform and conditional use raw JS — do NOT normalize templates,
-      // but DO strip legacy .result references
+      // Raw JS: do not normalize templates, but do strip legacy .result references.
       case "transform": {
         const tCfg = cfg as TransformStep;
         const stripped = tCfg.expression.replace(

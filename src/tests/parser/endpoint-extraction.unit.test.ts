@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   extractCompactEndpoints,
+  extractEndpointByLocation,
   extractFullEndpoints,
 } from "../../parser/endpoint-extraction.js";
 import type { OpenAPIV3 } from "openapi-types";
@@ -31,6 +32,8 @@ describe("extractCompactEndpoints", () => {
         operationId: "get__api_v1_users_info",
         summary: "GET /api/v1/users.info",
         domain: "user-management",
+        path: "/api/v1/users.info",
+        method: "get",
       },
     ]);
   });
@@ -79,6 +82,99 @@ describe("extractCompactEndpoints", () => {
     assert.deepStrictEqual(
       endpoints.map((endpoint) => endpoint.summary),
       ["Description-only endpoint", "POST /plain"],
+    );
+  });
+});
+
+describe("extractEndpointByLocation", () => {
+  it("extracts the same endpoint shape as the full scan path", () => {
+    const spec = makeSpec({
+      "/rooms/{rid}": {
+        parameters: [
+          {
+            name: "rid",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+          },
+        ],
+        post: {
+          operationId: "update-room",
+          summary: "Update room",
+          parameters: [
+            {
+              name: "includeMembers",
+              in: "query",
+              schema: { type: "boolean" },
+            },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    name: { type: "string" },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              description: "OK",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      success: { type: "boolean" },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const [scanned] = extractFullEndpoints(
+      spec,
+      "rooms",
+      new Set(["update-room"]),
+      3,
+    );
+    const direct = extractEndpointByLocation(
+      spec,
+      "rooms",
+      "update-room",
+      "/rooms/{rid}",
+      "post",
+      3,
+    );
+
+    assert.deepStrictEqual(direct, scanned);
+  });
+
+  it("returns null for missing location coordinates", () => {
+    const spec = makeSpec({
+      "/rooms": {
+        get: {
+          operationId: "get-rooms",
+          responses: {},
+        },
+      },
+    });
+
+    assert.equal(
+      extractEndpointByLocation(spec, "rooms", "get-rooms", "/missing", "get"),
+      null,
+    );
+    assert.equal(
+      extractEndpointByLocation(spec, "rooms", "get-rooms", "/rooms", "post"),
+      null,
     );
   });
 });
@@ -572,6 +668,139 @@ describe("extractFullEndpoints", () => {
     const props = endpoint.responseSchema?.properties as Record<string, any>;
     assert.ok(props.full, "should use 200 response, not 206");
     assert.equal(props.partial, undefined);
+  });
+
+  it("extracts operation metadata, media examples, and error response schemas", () => {
+    const spec = makeSpec({
+      "/channels": {
+        post: {
+          operationId: "create-channel",
+          deprecated: true,
+          requestBody: {
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: { name: { type: "string" } },
+                },
+                example: { name: "general" },
+                examples: {
+                  private: {
+                    value: { name: "private-team" },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              description: "OK",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: { success: { type: "boolean" } },
+                  },
+                  examples: {
+                    ok: {
+                      value: { success: true },
+                    },
+                  },
+                },
+              },
+            },
+            "400": {
+              description: "Invalid request",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      error: { type: "string" },
+                    },
+                  },
+                },
+              },
+            },
+            "401": {
+              description: "Unauthorized",
+            },
+          },
+        },
+      },
+    });
+
+    const [endpoint] = extractFullEndpoints(
+      spec,
+      "rooms",
+      new Set(["create-channel"]),
+    );
+
+    assert.equal(endpoint.deprecated, true);
+    assert.deepStrictEqual(endpoint.requestExamples, {
+      private: {
+        value: { name: "private-team" },
+      },
+      default: { name: "general" },
+    });
+    assert.deepStrictEqual(endpoint.responseExamples, {
+      ok: {
+        value: { success: true },
+      },
+    });
+    assert.deepStrictEqual(endpoint.errorResponses, {
+      "400": {
+        description: "Invalid request",
+        schema: {
+          type: "object",
+          properties: {
+            error: { type: "string" },
+          },
+        },
+      },
+      "401": {
+        description: "Unauthorized",
+      },
+    });
+  });
+
+  it("copies parameter-level examples into parameter schemas", () => {
+    const spec = makeSpec({
+      "/messages": {
+        get: {
+          operationId: "get-messages",
+          parameters: [
+            {
+              name: "roomId",
+              in: "query",
+              schema: { type: "string" },
+              example: "GENERAL",
+            },
+          ],
+          responses: {},
+        },
+      },
+    });
+
+    const [endpoint] = extractFullEndpoints(
+      spec,
+      "messaging",
+      new Set(["get-messages"]),
+    );
+    const inputProps = endpoint.inputSchema.properties as Record<string, any>;
+    const queryProps = endpoint.parameterSchemas.query?.properties as Record<
+      string,
+      any
+    >;
+
+    assert.deepStrictEqual(inputProps.roomId, {
+      type: "string",
+      examples: ["GENERAL"],
+    });
+    assert.deepStrictEqual(queryProps.roomId, {
+      type: "string",
+      examples: ["GENERAL"],
+    });
   });
 
   it("uses global security unless operation security is provided", () => {

@@ -4,13 +4,8 @@ import { fileURLToPath } from "node:url";
 import type { GeneratedFile } from "./types.js";
 
 /**
- * Runtime engine modules vendored verbatim into every generated project. These
- * are the actual source files from `src/workflow/` — copied, never re-authored —
- * so a generated server runs the exact engine this package ships and tests.
- *
- * `index.ts` and `types.ts` from the workflow folder are intentionally excluded:
- * the workflow barrel re-exports the composer (compile-time only), so the
- * generated project gets a slim engine barrel instead (see ENGINE_INDEX).
+ * Vendored verbatim, so a generated server runs the exact engine this package tests.
+ * `index.ts`/`types.ts` are excluded because the barrel re-exports the composer.
  */
 export const ENGINE_MODULES = [
   "types.ts",
@@ -29,7 +24,6 @@ export * from "./sampling.js";
 export * from "./executor.js";
 `;
 
-/** Walk up from `startDir` until a directory containing `package.json` is found. */
 function findPackageRoot(startDir: string): string {
   let dir = startDir;
   for (;;) {
@@ -40,17 +34,7 @@ function findPackageRoot(startDir: string): string {
   }
 }
 
-/**
- * Locate the directory holding the engine `.ts` sources, tolerating every run
- * layout:
- *   - from source via tsx: `src/generator` -> `src/workflow`;
- *   - from a built package: `dist/generator` -> `dist/workflow` (the build step
- *     copies the `.ts` sources next to the compiled output);
- *   - as a last resort, the always-present `src/workflow` under the package
- *     root, so a bare `tsc` build (without the copy step) still works.
- *
- * The first candidate that actually contains the engine sources wins.
- */
+/** First candidate holding the engine sources wins: tsx `src/`, built `dist/`, then `src/`. */
 export function workflowDir(): string {
   const here = dirname(fileURLToPath(import.meta.url));
   const candidates = [
@@ -61,15 +45,11 @@ export function workflowDir(): string {
   for (const dir of candidates) {
     if (existsSync(join(dir, probe))) return dir;
   }
-  // Nothing found — return the primary candidate so the caller surfaces a
-  // clear ENOENT naming the exact missing engine source.
+  // Return the primary candidate, so the caller's ENOENT names the missing engine source.
   return candidates[0];
 }
 
-/**
- * Read the engine source files and return them as generated files under
- * `src/engine/`, plus a slim barrel.
- */
+/** The engine sources as generated files under `src/engine/`, plus a slim barrel. */
 export function bundleEngine(): GeneratedFile[] {
   const dir = workflowDir();
   const files: GeneratedFile[] = ENGINE_MODULES.map((name) => ({

@@ -55,6 +55,8 @@ describe("stale cache fallback", () => {
           operationId: "post-api-v1-login",
           summary: "Login from fresh cache",
           domain: "authentication",
+          path: "/api/v1/login",
+          method: "post",
         },
       ]);
     } finally {
@@ -107,6 +109,8 @@ describe("stale cache fallback", () => {
           operationId: "post-api-v1-login",
           summary: "Login from stale cache",
           domain: "authentication",
+          path: "/api/v1/login",
+          method: "post",
         },
       ]);
     } finally {
@@ -152,6 +156,8 @@ describe("stale cache fallback", () => {
           operationId: "post-api-v1-login",
           summary: "Login from network",
           domain: "authentication",
+          path: "/api/v1/login",
+          method: "post",
         },
       ]);
     } finally {

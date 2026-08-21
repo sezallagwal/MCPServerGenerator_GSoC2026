@@ -7,11 +7,8 @@ import {
   generateToolTest,
 } from "./codegen.js";
 import {
-  generateEnvExample,
   generateGitignore,
   generatePackageJson,
-  generateReadme,
-  generateRcClient,
   generateTsConfig,
 } from "./scaffold.js";
 import type {
@@ -20,8 +17,10 @@ import type {
   GenerateProjectResult,
 } from "./types.js";
 import type { WorkflowDefinition } from "../workflow/types.js";
+import { generateWorkflowDiagram } from "./mermaid-codegen.js";
+import type { PlatformAdapter } from "../platform/adapter.js";
+import { RocketChatAdapter } from "../platform/rocketchat-adapter.js";
 
-/** Normalize an arbitrary name into a valid lowercase package/server name. */
 export function sanitizeServerName(name: string): string {
   const cleaned = name
     .trim()
@@ -32,12 +31,7 @@ export function sanitizeServerName(name: string): string {
   return safe || "mcp_server";
 }
 
-/**
- * Reduce a workflow name to a safe module basename for `src/tools/<name>.ts`.
- * The result only contains `[A-Za-z0-9_]` and always starts with a letter or
- * underscore, so it is safe both as a filename and when embedded in an import
- * specifier — a workflow name is otherwise unconstrained DSL text.
- */
+/** A workflow name is unconstrained DSL text; this makes it safe as a filename and an import. */
 export function sanitizeModuleName(name: string): string {
   const cleaned = name
     .trim()
@@ -47,10 +41,7 @@ export function sanitizeModuleName(name: string): string {
   return /^[A-Za-z_]/.test(cleaned) ? cleaned : `tool_${cleaned}`;
 }
 
-/**
- * Assign a unique module basename to each workflow (aligned by index),
- * disambiguating collisions produced by sanitization with a numeric suffix.
- */
+/** Aligned by index, with a numeric suffix wherever sanitization collides. */
 export function assignModuleNames(workflows: WorkflowDefinition[]): string[] {
   const used = new Set<string>();
   return workflows.map((workflow) => {
@@ -65,28 +56,51 @@ export function assignModuleNames(workflows: WorkflowDefinition[]): string[] {
   });
 }
 
-/** Assemble the full set of files for a generated MCP server project. */
+/** Retry-safe steps get `continueOnError`; an explicit DSL value wins. Mutates a private copy. */
+function applyErrorPolicy(
+  workflows: WorkflowDefinition[],
+  adapter: PlatformAdapter,
+): void {
+  for (const workflow of workflows) {
+    for (const step of workflow.steps) {
+      if (step.config.type !== "api_call") continue;
+      if (step.config.continueOnError !== undefined) continue;
+      if (adapter.shouldContinueOnError(step.config.operationId)) {
+        step.config.continueOnError = true;
+      }
+    }
+  }
+}
+
 export function generateProject(
   input: GenerateProjectInput,
 ): GenerateProjectResult {
   const serverName = sanitizeServerName(input.serverName);
-  const { workflows, endpoints } = input;
+  const { endpoints } = input;
+  const adapter = input.adapter ?? new RocketChatAdapter();
+  const transport = input.transport ?? "stdio";
 
-  if (workflows.length === 0) {
+  if (input.workflows.length === 0) {
     throw new Error("Cannot generate a project with no workflows.");
   }
 
+  // Private copy, so a caller's workflows come back unchanged and this stays re-runnable.
+  const workflows = structuredClone(input.workflows);
+
   const usesSampling = workflows.some((w) => w.usesSampling);
   const usesElicitation = workflows.some((w) => w.usesElicitation);
+
+  applyErrorPolicy(workflows, adapter);
+
+  const clientFile = adapter.clientFileName();
+  const clientModule = clientFile.replace(/\.ts$/, "");
 
   const files: GeneratedFile[] = [];
 
   // Vendored engine.
   files.push(...bundleEngine());
 
-  // One tool file + one test file per workflow, keyed by a safe, unique module
-  // basename so an arbitrary workflow name can never break the filename or its
-  // import.
+  // Keyed by a safe unique basename, so an arbitrary workflow name cannot break a filename.
   const moduleNames = assignModuleNames(workflows);
   workflows.forEach((workflow, i) => {
     files.push({
@@ -99,7 +113,7 @@ export function generateProject(
     });
   });
 
-  // Shared test setup (mock client/server/endpoints).
+  // Platform-neutral: it mocks the engine's own interfaces, so it bypasses the adapter.
   files.push({ path: "src/tests/setup.ts", content: generateTestSetup() });
 
   // Wiring + scaffolding.
@@ -107,10 +121,19 @@ export function generateProject(
     path: "src/endpoints.ts",
     content: generateEndpointMap(endpoints),
   });
-  files.push({ path: "src/rc-client.ts", content: generateRcClient() });
+  files.push({
+    path: `src/${clientFile}`,
+    content: adapter.generateRestClientCode(),
+  });
   files.push({
     path: "src/server.ts",
-    content: generateServerEntry(serverName, workflows, moduleNames),
+    content: generateServerEntry(
+      serverName,
+      workflows,
+      moduleNames,
+      clientModule,
+      transport,
+    ),
   });
   files.push({
     path: "package.json",
@@ -120,17 +143,22 @@ export function generateProject(
   files.push({ path: ".gitignore", content: generateGitignore() });
   files.push({
     path: ".env.example",
-    content: generateEnvExample(usesSampling),
+    content: adapter.generateEnvExample({ usesSampling, transport }),
   });
+  // Appended here, not per adapter README, so every platform gets it from one place.
   files.push({
     path: "README.md",
-    content: generateReadme(serverName, workflows, endpoints),
+    content:
+      adapter.generateReadme(serverName, workflows, endpoints) +
+      generateWorkflowDiagram(workflows),
   });
 
   return {
     files,
     summary: {
       serverName,
+      platformName: adapter.platformName,
+      transport,
       workflowCount: workflows.length,
       endpointCount: endpoints.length,
       usesSampling,

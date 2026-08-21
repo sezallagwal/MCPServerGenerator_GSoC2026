@@ -117,9 +117,12 @@ export function composeWorkflowDefinition(
   const usesElicitation = steps.some((s) => s.config.type === "elicitation");
   const hasConditionals = steps.some((s) => s.config.type === "conditional");
 
-  const requiredEndpoints = steps
+  const apiCalls = steps
     .filter((s) => s.config.type === "api_call")
     .map((s) => (s.config as ApiCallStep).operationId);
+
+  // Endpoints needed, not calls made: two steps hitting one endpoint require it once.
+  const requiredEndpoints = [...new Set(apiCalls)];
 
   const workflow: WorkflowDefinition = {
     name,
@@ -136,7 +139,8 @@ export function composeWorkflowDefinition(
     executionOrder,
     summary: {
       stepCount: steps.length,
-      apiCalls: requiredEndpoints,
+      // One entry per api_call step, so the count reflects work done.
+      apiCalls,
       usesSampling,
       usesElicitation,
       hasConditionals,

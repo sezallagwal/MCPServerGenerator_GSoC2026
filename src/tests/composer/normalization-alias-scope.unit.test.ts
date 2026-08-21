@@ -154,10 +154,7 @@ describe("normalizeTemplateFields - forEach alias scoping", () => {
   });
 
   it("keeps alias precedence: an out-of-scope ref is never rescued into a param", () => {
-    // A forEach alias intentionally shares its name with a workflow param.
-    // The event-param normalizer must NOT rewrite the out-of-scope reference
-    // into "params.channel.*"; it must remain an alias reference so the scope
-    // check rejects it instead of silently resolving to an empty value.
+    // The alias shares a param's name on purpose: it must stay an alias for the scope check.
     const params: JSONSchema7 = {
       type: "object",
       properties: { channel: { type: "object" } },

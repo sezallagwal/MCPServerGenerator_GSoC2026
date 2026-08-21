@@ -1,15 +1,50 @@
-import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import type { EndpointDetailSource } from "../parser/types.js";
-import { composeDsl } from "../generator/pipeline.js";
+import { join } from "node:path";
+import type { FullEndpoint } from "../parser/types.js";
+import { applyPlatformTransforms, composeDsl } from "../generator/pipeline.js";
 import { generateProject, sanitizeServerName } from "../generator/project.js";
+import type { Transport } from "../generator/codegen.js";
 import type { GeneratorEndpoint } from "../generator/types.js";
+import {
+  isWriteMode,
+  writeProjectFiles,
+  type WriteMode,
+} from "../generator/write-project.js";
+import type { PlatformAdapter } from "../platform/adapter.js";
+import { RocketChatAdapter } from "../platform/rocketchat-adapter.js";
 
 export interface GenerateArgs {
-  /** The workflow DSL document. */
   dsl: string;
-  /** Directory to write the generated project into. Default: "./generated". */
+  /** Default: "./generated". */
   outputDir?: string;
+  /** `additive` never overwrites a file the user has edited. Default `overwrite`. */
+  writeMode?: WriteMode;
+  /** `http` emits a Streamable HTTP server; `stdio` (default) emits a stdio one. */
+  transport?: Transport;
+  /** Target platform. Defaults to {@link RocketChatAdapter}. */
+  adapter?: PlatformAdapter;
+}
+
+/** Locations are resolved here, where the spec is available, so the engine never guesses. */
+function toGeneratorEndpoint(ep: FullEndpoint): GeneratorEndpoint {
+  const queryParams = ep.parameters
+    .filter((p) => p.in === "query")
+    .map((p) => p.name);
+  const headerParams = ep.parameters
+    .filter((p) => p.in === "header")
+    .map((p) => p.name);
+
+  return {
+    operationId: ep.operationId,
+    method: ep.method,
+    path: ep.path,
+    summary: ep.summary,
+    ...(queryParams.length > 0 ? { queryParams } : {}),
+    ...(headerParams.length > 0 ? { headerParams } : {}),
+    // An explicit empty `security: []` is the spec saying this one operation is public.
+    ...(Array.isArray(ep.security) && ep.security.length === 0
+      ? { auth: false }
+      : {}),
+  };
 }
 
 function ok(text: string) {
@@ -20,15 +55,10 @@ function fail(text: string) {
   return { content: [{ type: "text" as const, text }], isError: true };
 }
 
-/**
- * Generate a complete MCP server project from a DSL document and write it to
- * disk. Resolves the API endpoints the workflows reference through the parser,
- * so the generated endpoint map carries real methods and paths.
- */
-export async function handleGenerate(
-  parser: EndpointDetailSource,
-  args: GenerateArgs,
-) {
+/** Endpoints resolve through the same adapter that drives codegen, so the two cannot diverge. */
+export async function handleGenerate(args: GenerateArgs) {
+  const adapter = args.adapter ?? new RocketChatAdapter();
+
   let composed;
   try {
     composed = composeDsl(args.dsl);
@@ -42,6 +72,16 @@ export async function handleGenerate(
     return fail("The DSL declared no workflows.");
   }
 
+  // Before endpoint resolution: these rewrite operationIds the endpoint map must cover.
+  try {
+    applyPlatformTransforms(composed.workflows, adapter);
+  } catch (err) {
+    return fail(
+      `${adapter.platformName} workflow adjustment failed: ` +
+        `${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+
   const operationIds = [
     ...new Set(composed.workflows.flatMap((w) => w.requiredEndpoints)),
   ].filter(Boolean);
@@ -49,13 +89,8 @@ export async function handleGenerate(
   let endpoints: GeneratorEndpoint[];
   let correctedIds: ReadonlyMap<string, string>;
   try {
-    const resolved = await parser.getFullEndpoints(operationIds);
-    endpoints = resolved.endpoints.map((ep) => ({
-      operationId: ep.operationId,
-      method: ep.method,
-      path: ep.path,
-      summary: ep.summary,
-    }));
+    const resolved = await adapter.getFullEndpoints(operationIds);
+    endpoints = resolved.endpoints.map(toGeneratorEndpoint);
     correctedIds = resolved.correctedIds;
   } catch (err) {
     return fail(
@@ -63,14 +98,11 @@ export async function handleGenerate(
     );
   }
 
-  // Map every requested operationId to the endpoint it actually resolved to
-  // (the parser auto-corrects near-misses and reports them via correctedIds).
+  // The parser auto-corrects near-misses, so map requested ids to what actually resolved.
   const resolvedIds = new Set(endpoints.map((ep) => ep.operationId));
   const actualFor = (id: string): string => correctedIds.get(id) ?? id;
 
-  // Fail closed: refuse to generate if any operationId cannot be resolved to a
-  // real endpoint. Generating anyway produces tools whose api_call steps fall
-  // back to an empty GET path at runtime.
+  // Fail closed: generating anyway yields api_call steps that fall back to an empty GET.
   const unresolved = operationIds.filter(
     (id) => !resolvedIds.has(actualFor(id)),
   );
@@ -82,9 +114,7 @@ export async function handleGenerate(
     );
   }
 
-  // Rewrite corrected operationIds into the composed workflows so the embedded
-  // steps and the generated endpoint map agree — otherwise a corrected id would
-  // be missing from the map and hit the empty-GET fallback at runtime.
+  // Rewrite corrected ids into the workflows, or the endpoint map will not contain them.
   const corrected: string[] = [];
   for (const workflow of composed.workflows) {
     for (const step of workflow.steps) {
@@ -96,7 +126,10 @@ export async function handleGenerate(
         }
       }
     }
-    workflow.requiredEndpoints = workflow.requiredEndpoints.map(actualFor);
+    // Two distinct ids can correct to the same endpoint, so re-deduplicate.
+    workflow.requiredEndpoints = [
+      ...new Set(workflow.requiredEndpoints.map(actualFor)),
+    ];
   }
 
   let result;
@@ -105,6 +138,8 @@ export async function handleGenerate(
       serverName: composed.projectName,
       workflows: composed.workflows,
       endpoints,
+      adapter,
+      transport: args.transport,
     });
   } catch (err) {
     return fail(
@@ -113,12 +148,18 @@ export async function handleGenerate(
   }
 
   const root = join(args.outputDir ?? "generated", result.summary.serverName);
+
+  const writeMode = args.writeMode ?? "overwrite";
+  if (!isWriteMode(writeMode)) {
+    return fail(
+      `Invalid writeMode: ${JSON.stringify(args.writeMode)}. ` +
+        `Expected "overwrite" or "additive".`,
+    );
+  }
+
+  let write;
   try {
-    for (const file of result.files) {
-      const target = join(root, file.path);
-      mkdirSync(dirname(target), { recursive: true });
-      writeFileSync(target, file.content, "utf8");
-    }
+    write = writeProjectFiles(root, result.files, writeMode);
   } catch (err) {
     return fail(
       `Failed to write project: ${err instanceof Error ? err.message : String(err)}`,
@@ -127,13 +168,56 @@ export async function handleGenerate(
 
   const lines = [
     `Generated MCP server "${result.summary.serverName}" at ${root}`,
+    `  Platform: ${result.summary.platformName}`,
     `  Workflows: ${result.summary.workflowCount}`,
     `  Endpoints: ${result.summary.endpointCount}`,
     `  Files: ${result.files.length}`,
     `  Sampling: ${result.summary.usesSampling ? "yes" : "no"}, Elicitation: ${
       result.summary.usesElicitation ? "yes" : "no"
     }`,
+    `  Transport: ${result.summary.transport}`,
+    `  Write mode: ${write.writeMode}`,
   ];
+
+  if (result.summary.transport === "http") {
+    lines.push(
+      `  NOTE: the HTTP server binds to 127.0.0.1 and has no authentication until ` +
+        `MCP_AUTH_TOKEN is set in .env. Set it before exposing the port.`,
+    );
+  }
+
+  if (write.writeMode === "additive") {
+    lines.push(
+      `  Added: ${write.added.length}, refreshed: ${write.overwritten.length}, ` +
+        `preserved: ${write.preserved.length}, conflicts: ${write.conflicts.length}`,
+    );
+    if (write.added.length > 0) {
+      lines.push(`  New files: ${write.added.join(", ")}`);
+    }
+    if (write.conflicts.length > 0) {
+      lines.push(
+        `  Kept your edits (not overwritten) — review if you want the new version:`,
+      );
+      for (const path of write.conflicts) lines.push(`    - ${path}`);
+    }
+    // Reported apart from user edits: nobody edited these, and a new tool needs them fresh.
+    if (write.staleScaffold.length > 0) {
+      lines.push(
+        `  This project has no generator manifest, so generator-owned files could`,
+        `  not be safely refreshed and are now STALE. Any newly added tool will`,
+        `  fail until you re-run with writeMode "overwrite" (after saving edits):`,
+      );
+      for (const path of write.staleScaffold) lines.push(`    - ${path}`);
+    }
+    // A removed workflow leaves its tool and test behind, and that test now fails.
+    if (write.orphaned.length > 0) {
+      lines.push(
+        `  No longer generated (left in place — delete them if the workflow is gone;`,
+        `  the orphaned test will fail against the new endpoint map):`,
+      );
+      for (const path of write.orphaned) lines.push(`    - ${path}`);
+    }
+  }
   if (corrected.length > 0) {
     lines.push(`  Auto-corrected operationIds: ${corrected.join(", ")}`);
   }

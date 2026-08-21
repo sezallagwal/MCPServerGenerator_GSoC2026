@@ -8,7 +8,7 @@
 
 This project is a **meta-MCP-server**: an MCP server whose purpose is to **generate other MCP servers**. Instead of exposing business tools (like "send a message"), it exposes tools that let an AI assistant **describe a workflow in a small DSL and receive a complete, runnable MCP server project** in return.
 
-It is driven as an MCP server — an AI client (Gemini CLI, Claude Desktop, VS Code Copilot) connects over stdio and calls three tools to discover an API, inspect schemas, and generate a project.
+It is driven as an MCP server — an AI client (Antigravity CLI, Claude Desktop, Cursor, VS Code) connects over stdio and calls three tools to discover an API, inspect schemas, and generate a project.
 
 ```mermaid
 mindmap
@@ -37,7 +37,7 @@ The generator sits between an **author** (an AI client) and the **generated arti
 ```mermaid
 flowchart LR
     subgraph Authors
-        AI[AI Client<br/>Gemini / Claude / Copilot]
+        AI[AI Client<br/>Antigravity / Claude / Cursor]
     end
 
     subgraph Generator[MCP Server Generator]

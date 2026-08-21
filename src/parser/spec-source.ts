@@ -1,5 +1,4 @@
-﻿import SwaggerParser from "@apidevtools/swagger-parser";
-import { OpenAPIV3 } from "openapi-types";
+﻿import { OpenAPIV3 } from "openapi-types";
 import {
   existsSync,
   mkdirSync,
@@ -10,6 +9,7 @@ import {
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { dereferenceSpec } from "./spec-fetch.js";
 import { ParserError } from "./types.js";
 import type { Domain, SpecSource, SpecSourceOptions } from "./types.js";
 
@@ -55,7 +55,8 @@ export class OpenApiSpecSource implements SpecSource {
     const url = this.getSpecUrl(domain);
     let api: OpenAPIV3.Document;
     try {
-      api = (await SwaggerParser.dereference(url)) as OpenAPIV3.Document;
+      // Shared fetch layer, so each attempt is abortable and transient failures retry.
+      api = (await dereferenceSpec(url)) as OpenAPIV3.Document;
     } catch (err) {
       const stale = this.readStaleDiskCache(domain);
       if (stale) {

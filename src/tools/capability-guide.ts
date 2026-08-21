@@ -1,7 +1,15 @@
 import type { CompactEndpoint } from "../parser/index.js";
 
-// Hints for commonly confused endpoints.
-export const ENDPOINT_ANNOTATIONS: Record<string, string> = {
+/** Passed in, not module constants, so one platform's vocabulary cannot reach another's guide. */
+export interface CapabilityGuideHints {
+  /** operationId -> clarifying hint, appended in parentheses. */
+  endpointAnnotations?: Record<string, string>;
+  /** domain -> note rendered above that domain's entries. */
+  domainNotes?: Record<string, string>;
+}
+
+// Reached only through `RocketChatAdapter.capabilityGuideHints()`.
+export const ROCKETCHAT_ENDPOINT_ANNOTATIONS: Record<string, string> = {
   "post-api-v1-chat_postMessage":
     "resolves #channel and @user names; processes @here/@all mentions; use when sending by channel name",
   "post-api-v1-chat_sendMessage":
@@ -28,13 +36,19 @@ export const ENDPOINT_ANNOTATIONS: Record<string, string> = {
     "max 5; no _id; analytics only",
 };
 
-// Notes shown before domain entries.
-export const DOMAIN_NOTES: Record<string, string> = {
+// Notes shown before domain entries, for Rocket.Chat.
+export const ROCKETCHAT_DOMAIN_NOTES: Record<string, string> = {
   rooms:
     "channels_* = public only. groups_* = private only. rooms_* = any type. Prefer rooms_* when type unknown.",
 };
 
-export function formatCapabilityGuide(endpoints: CompactEndpoint[]): string {
+export function formatCapabilityGuide(
+  endpoints: CompactEndpoint[],
+  hints: CapabilityGuideHints = {},
+): string {
+  const annotations = hints.endpointAnnotations ?? {};
+  const domainNotes = hints.domainNotes ?? {};
+
   if (endpoints.length === 0) {
     return "No endpoints found.";
   }
@@ -55,10 +69,10 @@ export function formatCapabilityGuide(endpoints: CompactEndpoint[]): string {
   const sections: string[] = [];
   for (const [domain, entries] of byDomain) {
     const items = [...entries].map(([summary, opId]) => {
-      const hint = ENDPOINT_ANNOTATIONS[opId];
+      const hint = annotations[opId];
       return hint ? `${summary} (${hint}) → ${opId}` : `${summary} → ${opId}`;
     });
-    const note = DOMAIN_NOTES[domain];
+    const note = domainNotes[domain];
     sections.push(
       note
         ? `## ${domain}\n${note}\n${items.join(", ")}`

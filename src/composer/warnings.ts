@@ -163,7 +163,7 @@ export function generateSemanticWarnings(
         message:
           `Step "${step.id}" uses chat.sendMessage with hardcoded rid "${rid}". ` +
           `The rid field requires a room ID (e.g. "6oaKzj..."), not a channel name. ` +
-          `Use "post-api-v1-chat-postMessage" with { channel: "#${rid}", text: "..." } instead, ` +
+          `Use "post-api-v1-chat_postMessage" with { channel: "#${rid}", text: "..." } instead, ` +
           `which resolves channel names natively.`,
       });
     }

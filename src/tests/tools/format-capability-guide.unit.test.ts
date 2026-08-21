@@ -1,6 +1,10 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { formatCapabilityGuide } from "../../tools/capability-guide.js";
+import {
+  formatCapabilityGuide,
+  ROCKETCHAT_DOMAIN_NOTES,
+  ROCKETCHAT_ENDPOINT_ANNOTATIONS,
+} from "../../tools/capability-guide.js";
 import type { CompactEndpoint } from "../../parser/index.js";
 
 function makeEndpoint(
@@ -12,6 +16,14 @@ function makeEndpoint(
     domain: "messaging" as CompactEndpoint["domain"],
     ...overrides,
   };
+}
+
+/** Hints come from the platform now, so Rocket.Chat wording has to be passed in explicitly. */
+function rcGuide(endpoints: CompactEndpoint[]): string {
+  return formatCapabilityGuide(endpoints, {
+    endpointAnnotations: ROCKETCHAT_ENDPOINT_ANNOTATIONS,
+    domainNotes: ROCKETCHAT_DOMAIN_NOTES,
+  });
 }
 
 describe("formatCapabilityGuide", () => {
@@ -38,7 +50,7 @@ describe("formatCapabilityGuide", () => {
         operationId: "post-api-v1-channels_create",
       }),
     ];
-    const result = formatCapabilityGuide(endpoints);
+    const result = rcGuide(endpoints);
 
     assert.ok(result.includes("## messaging"));
     assert.ok(result.includes("## rooms"));
@@ -144,7 +156,7 @@ describe("formatCapabilityGuide", () => {
         operationId: "post-api-v1-chat_delete",
       }),
     ];
-    const result = formatCapabilityGuide(endpoints);
+    const result = rcGuide(endpoints);
     assert.ok(
       result.includes(
         "Post Message (resolves #channel and @user names; processes @here/@all mentions; use when sending by channel name) → post-api-v1-chat_postMessage",
@@ -249,7 +261,7 @@ describe("formatCapabilityGuide", () => {
         operationId: "post-api-v1-chat_delete",
       }),
     ];
-    const result = formatCapabilityGuide(endpoints);
+    const result = rcGuide(endpoints);
 
     assert.ok(
       result.includes(
@@ -273,7 +285,7 @@ describe("formatCapabilityGuide", () => {
         operationId: "get-api-v1-channels_list",
       }),
     ];
-    const result = formatCapabilityGuide(endpoints);
+    const result = rcGuide(endpoints);
 
     const lines = result.split("\n");
     const roomsIdx = lines.findIndex((l) => l.startsWith("## rooms"));
@@ -297,7 +309,7 @@ describe("formatCapabilityGuide", () => {
         operationId: "post-api-v1-chat_sendMessage",
       }),
     ];
-    const result = formatCapabilityGuide(endpoints);
+    const result = rcGuide(endpoints);
 
     const lines = result.split("\n");
     const msgIdx = lines.findIndex((l) => l.startsWith("## messaging"));

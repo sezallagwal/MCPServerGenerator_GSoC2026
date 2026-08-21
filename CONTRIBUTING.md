@@ -9,7 +9,7 @@ Thanks for helping improve the Rocket.Chat MCP Server Generator. This guide cove
 - **Node.js 22 or newer**
 - **npm**
 - **Git**
-- **gemini-cli** — optional, only if you want to test the repo as a Gemini extension
+- **An MCP client** — optional, only if you want to drive the generator end to end rather than through the test suite. Any MCP-compatible client works (Antigravity CLI, Claude Desktop, Cursor, VS Code); see [Register with an MCP client](README.md#register-with-an-mcp-client)
 
 ## Setup
 

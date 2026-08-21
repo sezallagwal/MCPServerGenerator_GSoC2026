@@ -1,86 +1,233 @@
 <h1 align="center">Rocket.Chat MCP Server Generator</h1>
 
 <p align="center">
-  A <a href="https://github.com/google-gemini/gemini-cli">gemini-cli</a> extension that generates <strong>minimal</strong>, <strong>workflow-driven</strong> MCP servers — solving context bloat by exposing only the workflows a project actually needs.
+  An <a href="https://modelcontextprotocol.io/">MCP</a> server that generates other MCP servers — scoped to only the API operations a project actually needs.
 </p>
 
 <p align="center">
-  <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg" alt="Node.js >= 22"></a>
-  <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-5.8-blue.svg" alt="TypeScript"></a>
-  <a href="https://modelcontextprotocol.io/"><img src="https://img.shields.io/badge/MCP-1.27-purple.svg" alt="MCP SDK"></a>
-  <a href="https://rocket.chat/"><img src="https://img.shields.io/badge/Rocket.Chat-558%20endpoints-red.svg" alt="558 Endpoints"></a>
+  <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-5.9-blue.svg" alt="TypeScript 5.9"></a>
+  <a href="https://github.com/modelcontextprotocol/typescript-sdk"><img src="https://img.shields.io/badge/MCP%20SDK-1.x-purple.svg" alt="MCP SDK 1.x"></a>
+  <a href="https://github.com/RocketChat/MCPServerGenerator_GSoC2026/actions/workflows/ci.yml"><img src="https://github.com/RocketChat/MCPServerGenerator_GSoC2026/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
 </p>
 
----
+## Overview
 
-## The Problem
+Rocket.Chat's public OpenAPI surface spans 12 domains and several hundred operations. An MCP server that wraps all of them has to declare all of them as tools, and a client re-sends those declarations on every turn — so a project pays context cost proportional to the tools it declares, not the ones it calls.
 
-A major pain point when adopting MCP is **context bloat**. Most MCP servers ship support for a large surface of service APIs, so anyone adopting them spends most of their token budget on static tool definitions for calls they will never make. In agentic code-generation workflows this is worse — every agent burns tokens in loops carrying tools the project will never use.
+This generator takes a different approach. It exposes the API surface as discovery tools, so an AI client can find the operations a goal needs, describe them as multi-step **workflow tools**, and have a complete, runnable MCP server project written to disk. A generated server exposes one tool per workflow rather than one tool per endpoint.
 
-## The Solution
+Each workflow chains API calls, LLM reasoning, human confirmation, data transforms, and conditional branching behind a single tool call. The workflow engine is copied into the output, so a generated project has no runtime dependency on this generator.
 
-This generator lets you create a **minimal** MCP server that covers only the subset of APIs your project actually needs. Describe what you want in plain English; the generator finds the relevant REST APIs, composes multi-step workflow tools that chain those API calls with AI reasoning, and outputs a complete, runnable MCP server project.
+## Features
 
-The output is **not** a thin REST wrapper. Each generated tool is a **workflow** that chains multiple API calls, LLM reasoning, user confirmation, data transforms, and conditional logic into one higher-level operation — invoked from any MCP-compatible client such as Gemini CLI, Claude Desktop, Cursor, or VS Code Copilot.
+- **Workflow tools, not endpoint wrappers** — five step types (`api_call`, `sampling`, `elicitation`, `transform`, `conditional`) composed into one MCP tool per workflow.
+- **Live OpenAPI specs** — fetched from the [Rocket.Chat Open API repository](https://github.com/RocketChat/Rocket.Chat-Open-API) at runtime and cached for 24 hours, so new endpoints appear without hand-written definitions.
+- **Fail-closed generation** — if any referenced `operationId` cannot be resolved against the spec, nothing is written.
+- **Sandboxed expressions** — `transform` and `conditional` bodies are validated against an AST allowlist before they run.
+- **Two transports** — stdio, or Streamable HTTP with closed-by-default network settings.
+- **Additive regeneration** — add workflows to an existing project without overwriting files you have edited.
+- **Derived permissions** — for Rocket.Chat, the generated README lists the permissions the server's account needs.
+- **Self-contained output** — generated projects ship their own tests, README, and workflow diagram.
 
-## How It Works
+Rocket.Chat is the supported target. A `PlatformAdapter` seam keeps the generator core free of platform specifics, and an experimental generic OpenAPI adapter exists behind it, but it is not wired to a user-facing option yet.
 
-It is itself an MCP server that exposes three tools. An AI client calls them in sequence:
+## How it works
 
-| Tool                       | Purpose                                                                    |
-| -------------------------- | -------------------------------------------------------------------------- |
-| **`get_capability_guide`** | Discovers and lists the available REST API endpoints                       |
-| **`get_endpoint_schemas`** | Returns exact request/response schemas for the chosen endpoints            |
-| **`generate`**             | Validates the described workflows and writes a complete MCP server project |
+The generator is an MCP server exposing three tools, called in sequence:
 
-```
-Describe intent -> get_capability_guide -> get_endpoint_schemas -> generate -> ready to deploy
-```
+| Tool                   | Purpose                                                          |
+| ---------------------- | ---------------------------------------------------------------- |
+| `get_capability_guide` | Lists the available REST API operations with their operationIds  |
+| `get_endpoint_schemas` | Returns the request and response schemas the spec documents      |
+| `generate`             | Validates the workflows and writes a complete MCP server project |
 
-You describe the goal in natural language; the AI handles endpoint selection, workflow composition, and code generation autonomously.
+### `generate` parameters
 
-## Key Capabilities
+| Parameter   | Type                          | Default       | Purpose                            |
+| ----------- | ----------------------------- | ------------- | ---------------------------------- |
+| `dsl`       | `string`                      | required      | The workflow DSL document          |
+| `outputDir` | `string`                      | `generated/`  | Where to write the project         |
+| `writeMode` | `"overwrite"` \| `"additive"` | `"overwrite"` | See [Write modes](#write-modes)    |
+| `transport` | `"stdio"` \| `"http"`         | `"stdio"`     | Transport for the generated server |
 
-- **Plain-English to working server** — go from an idea to a complete, tested MCP server project without writing the integration by hand.
-- **Workflow tools, not raw endpoints** — each tool composes API calls, AI reasoning (sampling), human-in-the-loop confirmation (elicitation), data transforms, and conditional branching.
-- **Minimal by design** — only the workflows you ask for are generated, keeping the token footprint small.
-- **Automatic API discovery** — fetches official OpenAPI specs at runtime (558 Rocket.Chat endpoints across 12 domains), so new endpoints are available without manual definitions.
-- **Complete project output** — every generated server includes source, a runtime workflow engine, tests, configuration, and a README.
-- **Two ways to run** — as a Gemini CLI extension (AI-driven), or as a standalone MCP server for deterministic generation.
+The project is written to `<outputDir>/<project-name>`, where the name is sanitized for use as a directory and identifier (`release-notifier` becomes `release_notifier`).
 
-## Prerequisites
+## Installation
+
+### Prerequisites
 
 - [Node.js](https://nodejs.org/) v22 or newer
-- [gemini-cli](https://github.com/google-gemini/gemini-cli) installed and configured (for the AI-driven flow)
+- An MCP-compatible client (Antigravity CLI, Claude Desktop, Cursor, VS Code, or any other)
 
-## Quick Start
-
-Install as a Gemini CLI extension, then describe what you need:
-
-```
-gemini> I need an MCP server that can send messages and manage channels
-```
-
-Gemini discovers the right endpoints, composes the workflows, and generates a complete project — ready to install and run.
-
-## Building & Testing
+### Setup
 
 ```bash
+git clone https://github.com/RocketChat/MCPServerGenerator_GSoC2026.git
+cd MCPServerGenerator_GSoC2026
 npm install
-npm test
-npm run build
 ```
 
-## Documentation
+### Register with an MCP client
 
-- **[Architecture & High-Level Design](docs/ARCHITECTURE.md)** — how the system fits together
-- **[DSL Reference](docs/DSL_REFERENCE.md)** — the complete DSL language spec
-- **[Generated Project Anatomy](docs/GENERATED_PROJECT.md)** — what the output looks like
-- **[Security Model](docs/SECURITY.md)** — sandbox, allowlist, and threat model
-- **[Testing Guide](docs/TESTING.md)** — test suite map and conventions
-- **[Contributing](CONTRIBUTING.md)** — setup, workflow, and contribution guide
+The generator speaks MCP over stdio, so any MCP client can drive it:
 
-## License
+```jsonc
+{
+  "mcpServers": {
+    "mcp-server-generator": {
+      "command": "node",
+      "args": ["--import", "tsx", "src/index.ts"],
+      "cwd": "/absolute/path/to/MCPServerGenerator_GSoC2026",
+    },
+  },
+}
+```
 
-[MIT](LICENSE)
+Antigravity CLI reads workspace MCP servers from `.agents/mcp_config.json`; Claude Desktop uses `claude_desktop_config.json`. The block above is the same shape in both.
+
+## Usage
+
+Describe what you need, and the client drives the three tools:
+
+```
+> I need an MCP server that drafts a release announcement,
+  asks me to approve it, then posts it to a channel
+```
+
+To run the generator directly instead:
+
+```bash
+npm run dev                  # from source via tsx
+npm run build && npm start   # compiled
+```
+
+### Example
+
+The DSL passed to `generate`:
+
+```
+PROJECT release-notifier
+DESCRIPTION Drafts a release announcement, gets human sign-off, then posts it
+
+WORKFLOW announce_release
+  DESCRIPTION Draft an announcement, confirm it with a human, then post it
+  PARAM channel : string : Target channel, e.g. #announcements
+  PARAM highlights : string : Raw release notes to turn into an announcement
+
+  STEP draft : sampling
+    LABEL Draft the announcement
+    PROMPT <<<
+      Write a short release announcement from these highlights:
+      {{params.highlights}}
+    >>>
+
+  STEP confirm : elicitation
+    LABEL Human sign-off before posting
+    MESSAGE Post this announcement? {{steps.draft}}
+    SCHEMA {"type":"object","properties":{"approved":{"type":"boolean"}}}
+    ON_DECLINE abort
+
+  STEP post : api_call
+    LABEL Post to the channel
+    OPERATION post-api-v1-chat_postMessage
+    MAP channel = {{params.channel}}
+    MAP text = {{steps.draft}}
+```
+
+This produces one MCP tool, `announce_release`, taking `channel` and `highlights`. Behind that single call the engine asks the model for a draft, pauses for human approval, and posts the approved text — with `ON_DECLINE abort` stopping the run if approval is refused.
+
+### Write modes
+
+**`overwrite`** (default) writes the project fresh.
+
+**`additive`** adds workflows to an existing generated project without clobbering files you have edited. Generated files are fingerprinted in `.mcp-gen-manifest.json`; on a re-run the generator compares fingerprints and reports what was added, refreshed, preserved, and where a conflict, stale scaffold, or orphan needs attention. A missing or unparseable manifest is treated as "not a generated project", and everything is preserved.
+
+## Workflow DSL
+
+The DSL is flat and line-oriented — every meaningful line is `KEYWORD value`, and indentation is cosmetic.
+
+```
+PROJECT <name>
+DESCRIPTION <text>
+
+WORKFLOW <name>            -> becomes one MCP tool
+  DESCRIPTION <text>
+  PARAM <name> : <type>    -> becomes a tool input
+  STEP <id> : <type>       -> one unit of work
+    <step keywords...>
+```
+
+### Step types
+
+| Type          | Purpose                        | Required field                   |
+| ------------- | ------------------------------ | -------------------------------- |
+| `api_call`    | Call a REST endpoint           | `OPERATION`                      |
+| `sampling`    | LLM reasoning over prior state | `PROMPT`                         |
+| `elicitation` | Ask the user and wait          | `MESSAGE`                        |
+| `transform`   | Reshape data with JavaScript   | `EXPRESSION`                     |
+| `conditional` | Branch execution               | `CONDITION` + (`THEN` or `ELSE`) |
+
+See the **[DSL Reference](docs/DSL_REFERENCE.md)** for the full grammar, template and `MAP` rules, iteration, and the complete error catalog.
+
+> `WEBHOOK` blocks are parsed and validated but not yet emitted into generated servers.
+
+## Generated output
+
+```
+<project-name>/
+├── src/
+│   ├── server.ts              # MCP server, tool registration, transport
+│   ├── endpoints.ts           # operationId -> { method, path }
+│   ├── rc-client.ts           # REST client
+│   ├── engine/                # workflow runtime, copied in verbatim
+│   │   ├── types.ts
+│   │   ├── expression-security.ts
+│   │   ├── templates.ts
+│   │   ├── api-call.ts
+│   │   ├── sampling.ts
+│   │   ├── executor.ts
+│   │   └── index.ts
+│   ├── tools/<workflow>.ts    # one per workflow: step data + handler
+│   └── tests/
+│       ├── setup.ts           # network-free mocks
+│       └── <workflow>.test.ts # one smoke test per workflow
+├── .env.example
+├── .gitignore
+├── .mcp-gen-manifest.json
+├── package.json
+├── tsconfig.json
+└── README.md
+```
+
+```bash
+cd generated/<project-name>
+npm install
+cp .env.example .env    # fill in credentials
+npm start
+```
+
+See **[Generated Project Anatomy](docs/GENERATED_PROJECT.md)** for a file-by-file walkthrough.
+
+## Development
+
+```bash
+npm test         # full suite
+npm run check    # format:check + lint + typecheck + test + build
+```
+
+| Script                     | Does                          |
+| -------------------------- | ----------------------------- |
+| `npm run dev`              | Run from source via tsx       |
+| `npm start`                | Run compiled `dist/`          |
+| `npm run build`            | Compile + copy engine sources |
+| `npm test`                 | Full suite via `node:test`    |
+| `npm run test:unit`        | Unit tests only               |
+| `npm run test:integration` | Integration tests only        |
+| `npm run typecheck`        | `tsc --noEmit`                |
+| `npm run lint`             | ESLint                        |
+| `npm run format`           | Prettier, write mode          |
+
+Tests run on `node:test` via `tsx`. Unit tests are network-free; integration tests exercise the real OpenAPI fetch and cache path. See the **[Testing Guide](docs/TESTING.md)** for the suite map and conventions.
+
+See **[Contributing](CONTRIBUTING.md)** for setup and workflow.

@@ -1,0 +1,4 @@
+# LF in the repository and in every working tree. `eol=lf` is the part that matters: it
+# pins the checkout, so Prettier passes on a fresh Windows clone and generated projects
+# fingerprint identically on every platform.
+* text=auto eol=lf

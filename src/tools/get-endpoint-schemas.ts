@@ -40,6 +40,18 @@ export async function handleGetEndpointSchemas(
       if (ep.responseSchema) {
         entry.response = ep.responseSchema;
       }
+      if (ep.deprecated) {
+        entry.deprecated = true;
+      }
+      if (ep.requestExamples) {
+        entry.requestExamples = ep.requestExamples;
+      }
+      if (ep.responseExamples) {
+        entry.responseExamples = ep.responseExamples;
+      }
+      if (ep.errorResponses) {
+        entry.errorResponses = ep.errorResponses;
+      }
       schemas[ep.operationId] = entry;
     }
 

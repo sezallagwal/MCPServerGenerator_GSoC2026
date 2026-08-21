@@ -13,17 +13,22 @@ permissions:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    # Windows is in the matrix because these checks are line-ending sensitive:
+    # Prettier expects LF, and generated output embeds whatever the host's
+    # checkout produced. A Linux-only matrix could not observe either problem.
+    runs-on: ${{ matrix.os }}
 
     strategy:
+      fail-fast: false
       matrix:
+        os: [ubuntu-latest, windows-latest]
         node-version: [22]
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js ${{ matrix.node-version }}
+      - name: Setup Node.js ${{ matrix.node-version }} on ${{ matrix.os }}
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}

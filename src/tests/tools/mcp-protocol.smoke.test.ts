@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createMcpServer } from "../../server.js";
+import { RocketChatAdapter } from "../../platform/rocketchat-adapter.js";
 import type { SpecParserInterface } from "../../parser/index.js";
 import type { Domain } from "../../parser/types.js";
 
@@ -57,7 +58,10 @@ const mockParser: SpecParserInterface = {
 };
 
 async function connectTestClient() {
-  const { server } = createMcpServer(mockParser);
+  // The adapter is the single discovery seam, so the stub parser goes through it.
+  const { server } = createMcpServer(
+    new RocketChatAdapter({ parser: mockParser }),
+  );
   const [clientTransport, serverTransport] =
     InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "test-client", version: "1.0.0" });

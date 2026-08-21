@@ -2,17 +2,26 @@ import { OpenAPIV3 } from "openapi-types";
 import type { JSONSchema7 } from "json-schema";
 import { mapOpenApiSchemaToJsonSchema } from "./schema-mapper.js";
 import { INPUT_SCHEMA_BODY_KEY } from "./types.js";
-import type { CompactEndpoint, Domain, FullEndpoint } from "./types.js";
+import type { Domain, FullEndpoint, IndexedCompactEndpoint } from "./types.js";
 
 const AUTH_HEADER_PARAMS = new Set(["X-Auth-Token", "X-User-Id"]);
 const PARAMETER_SCHEMA_LOCATIONS = ["path", "query", "header"] as const;
 type ParameterSchemaLocation = (typeof PARAMETER_SCHEMA_LOCATIONS)[number];
+type ResolvedMediaContent = {
+  contentType: string;
+  schema: OpenAPIV3.SchemaObject;
+  examples?: Record<string, unknown>;
+};
+type ResponseContent = {
+  schema?: JSONSchema7;
+  examples?: Record<string, unknown>;
+};
 
 export function extractCompactEndpoints(
   api: OpenAPIV3.Document,
   domain: Domain,
-): CompactEndpoint[] {
-  const results: CompactEndpoint[] = [];
+): IndexedCompactEndpoint[] {
+  const results: IndexedCompactEndpoint[] = [];
   if (!api.paths) return results;
 
   const usedIds = new Set<string>();
@@ -37,6 +46,8 @@ export function extractCompactEndpoints(
           operation.description?.slice(0, 80) ||
           `${method.toUpperCase()} ${path}`,
         domain,
+        path,
+        method,
       });
     }
   }
@@ -71,89 +82,126 @@ export function extractFullEndpoints(
 
       if (filterIds && !filterIds.has(operationId)) continue;
 
-      const allParams = mergeParameters(
-        toParameterObjects(pathItem.parameters),
-        toParameterObjects(operation.parameters),
+      results.push(
+        buildFullEndpoint(
+          domain,
+          operationId,
+          path,
+          method,
+          pathItem,
+          operation,
+          globalSecurity,
+          maxDepth,
+        ),
       );
-
-      let requestBody: FullEndpoint["requestBody"];
-      let requestBodySchema: JSONSchema7 | undefined;
-      let requestBodyRequired = false;
-      if (operation.requestBody) {
-        const rb = operation.requestBody as OpenAPIV3.RequestBodyObject;
-        const resolved = resolveRequestBodyContent(rb);
-        if (resolved) {
-          requestBodySchema = mapOpenApiSchemaToJsonSchema(
-            resolved.schema,
-            undefined,
-            maxDepth,
-          );
-          requestBodyRequired = rb.required ?? false;
-          requestBody = {
-            contentType: resolved.contentType,
-            schema: requestBodySchema,
-            required: requestBodyRequired,
-          };
-        }
-      }
-
-      const { inputSchema, parameterSchemas } = buildInputSchemas(
-        allParams,
-        requestBodySchema,
-        requestBodyRequired,
-        maxDepth,
-      );
-
-      let responseSchema: JSONSchema7 | undefined;
-      if (operation.responses) {
-        const successCodes = Object.keys(operation.responses)
-          .filter((code) => /^2\d{2}$/.test(code))
-          .sort();
-
-        for (const code of successCodes) {
-          const resp = operation.responses[code] as
-            | OpenAPIV3.ResponseObject
-            | undefined;
-          if (resp?.content?.["application/json"]?.schema) {
-            responseSchema = mapOpenApiSchemaToJsonSchema(
-              resp.content["application/json"].schema as OpenAPIV3.SchemaObject,
-              undefined,
-              maxDepth,
-            );
-            break;
-          }
-        }
-      }
-
-      const security =
-        operation.security === undefined
-          ? globalSecurity
-          : operation.security || [];
-
-      const summary =
-        operation.summary ||
-        operation.description?.slice(0, 80) ||
-        `${method.toUpperCase()} ${path}`;
-
-      const ep: FullEndpoint = {
-        operationId,
-        method: method.toUpperCase(),
-        path,
-        summary,
-        description: operation.description || summary,
-        domain,
-        parameters: allParams,
-        requestBody,
-        security,
-        inputSchema,
-        parameterSchemas,
-      };
-      if (responseSchema) ep.responseSchema = responseSchema;
-      results.push(ep);
     }
   }
 
   return results;
+}
+
+export function extractEndpointByLocation(
+  api: OpenAPIV3.Document,
+  domain: Domain,
+  operationId: string,
+  path: string,
+  method: string,
+  maxDepth?: number,
+): FullEndpoint | null {
+  const pathItem = api.paths?.[path];
+  if (!pathItem) return null;
+
+  const operation = pathItem[method as OpenAPIV3.HttpMethods];
+  if (!operation) return null;
+
+  return buildFullEndpoint(
+    domain,
+    operationId,
+    path,
+    method,
+    pathItem,
+    operation,
+    api.security || [],
+    maxDepth,
+  );
+}
+
+function buildFullEndpoint(
+  domain: Domain,
+  operationId: string,
+  path: string,
+  method: string,
+  pathItem: OpenAPIV3.PathItemObject,
+  operation: OpenAPIV3.OperationObject,
+  globalSecurity: OpenAPIV3.SecurityRequirementObject[],
+  maxDepth?: number,
+): FullEndpoint {
+  const allParams = mergeParameters(
+    toParameterObjects(pathItem.parameters),
+    toParameterObjects(operation.parameters),
+  );
+
+  let requestBody: FullEndpoint["requestBody"];
+  let requestBodySchema: JSONSchema7 | undefined;
+  let requestBodyRequired = false;
+  let requestExamples: Record<string, unknown> | undefined;
+  if (operation.requestBody && !("$ref" in operation.requestBody)) {
+    const rb = operation.requestBody;
+    const resolved = resolveRequestBodyContent(rb);
+    if (resolved) {
+      requestBodySchema = mapOpenApiSchemaToJsonSchema(
+        resolved.schema,
+        undefined,
+        maxDepth,
+      );
+      requestBodyRequired = rb.required ?? false;
+      requestBody = {
+        contentType: resolved.contentType,
+        schema: requestBodySchema,
+        required: requestBodyRequired,
+      };
+      requestExamples = resolved.examples;
+    }
+  }
+
+  const { inputSchema, parameterSchemas } = buildInputSchemas(
+    allParams,
+    requestBodySchema,
+    requestBodyRequired,
+    maxDepth,
+  );
+
+  const successResponse = extractSuccessResponse(operation.responses, maxDepth);
+  const errorResponses = extractErrorResponses(operation.responses, maxDepth);
+  const security =
+    operation.security === undefined
+      ? globalSecurity
+      : operation.security || [];
+
+  const summary =
+    operation.summary ||
+    operation.description?.slice(0, 80) ||
+    `${method.toUpperCase()} ${path}`;
+
+  const ep: FullEndpoint = {
+    operationId,
+    method: method.toUpperCase(),
+    path,
+    summary,
+    description: operation.description || summary,
+    domain,
+    parameters: allParams,
+    requestBody,
+    security,
+    inputSchema,
+    parameterSchemas,
+  };
+  if (successResponse.schema) ep.responseSchema = successResponse.schema;
+  if (operation.deprecated) ep.deprecated = true;
+  if (requestExamples) ep.requestExamples = requestExamples;
+  if (successResponse.examples) ep.responseExamples = successResponse.examples;
+  if (errorResponses) ep.errorResponses = errorResponses;
+  return ep;
 }
 
 function sanitizeOperationId(
@@ -266,6 +314,9 @@ function buildInputSchemas(
     if (param.description && typeof paramSchema === "object") {
       paramSchema.description = param.description;
     }
+    if (param.example !== undefined && typeof paramSchema === "object") {
+      paramSchema.examples = [param.example];
+    }
 
     inputProperties[param.name] = paramSchema;
     if (param.required) inputRequired.push(param.name);
@@ -306,13 +357,14 @@ const CONTENT_TYPE_PRIORITY = [
 
 function resolveRequestBodyContent(
   rb: OpenAPIV3.RequestBodyObject,
-): { contentType: string; schema: OpenAPIV3.SchemaObject } | undefined {
+): ResolvedMediaContent | undefined {
   for (const contentType of CONTENT_TYPE_PRIORITY) {
     const media = rb.content?.[contentType];
     if (media?.schema) {
       return {
         contentType,
         schema: media.schema as OpenAPIV3.SchemaObject,
+        examples: extractMediaExamples(media),
       };
     }
   }
@@ -323,10 +375,85 @@ function resolveRequestBodyContent(
         return {
           contentType,
           schema: media.schema as OpenAPIV3.SchemaObject,
+          examples: extractMediaExamples(media),
         };
       }
     }
   }
 
   return undefined;
+}
+
+function extractSuccessResponse(
+  responses: OpenAPIV3.ResponsesObject,
+  maxDepth?: number,
+): ResponseContent {
+  const successCodes = Object.keys(responses)
+    .filter((code) => /^2\d{2}$/.test(code))
+    .sort();
+
+  for (const code of successCodes) {
+    const resp = responses[code];
+    if (!resp || "$ref" in resp) continue;
+
+    const media = resp.content?.["application/json"];
+    if (!media?.schema) continue;
+
+    return {
+      schema: mapOpenApiSchemaToJsonSchema(
+        media.schema as OpenAPIV3.SchemaObject,
+        undefined,
+        maxDepth,
+      ),
+      examples: extractMediaExamples(media),
+    };
+  }
+
+  return {};
+}
+
+function extractErrorResponses(
+  responses: OpenAPIV3.ResponsesObject,
+  maxDepth?: number,
+): FullEndpoint["errorResponses"] | undefined {
+  const errors: NonNullable<FullEndpoint["errorResponses"]> = {};
+
+  for (const code of Object.keys(responses).sort()) {
+    if (!/^[45]\d{2}$/.test(code)) continue;
+
+    const resp = responses[code];
+    if (!resp || "$ref" in resp) continue;
+
+    const error: { description: string; schema?: JSONSchema7 } = {
+      description: resp.description,
+    };
+    const media = resp.content?.["application/json"];
+    if (media?.schema) {
+      error.schema = mapOpenApiSchemaToJsonSchema(
+        media.schema as OpenAPIV3.SchemaObject,
+        undefined,
+        maxDepth,
+      );
+    }
+    errors[code] = error;
+  }
+
+  return Object.keys(errors).length > 0 ? errors : undefined;
+}
+
+function extractMediaExamples(
+  media: OpenAPIV3.MediaTypeObject,
+): Record<string, unknown> | undefined {
+  const examples: Record<string, unknown> = {};
+
+  if (media.examples) {
+    Object.assign(examples, media.examples);
+  }
+
+  if (media.example !== undefined) {
+    const key = examples.default === undefined ? "default" : "example";
+    examples[key] = media.example;
+  }
+
+  return Object.keys(examples).length > 0 ? examples : undefined;
 }

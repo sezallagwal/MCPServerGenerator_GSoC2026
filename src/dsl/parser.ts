@@ -77,9 +77,7 @@ function parseStep(scanner: DslScanner): DslStep {
     const lineNumber = scanner.lineNumber;
     const line = scanner.consumeLine().trim();
 
-    // Reject keywords that do not apply to this step type (e.g. MAP in a
-    // transform step) instead of parsing them and silently dropping the value
-    // downstream.
+    // Rejected here rather than parsed and then silently dropped downstream.
     const keyword = line.split(/\s+/)[0];
     const allowedTypes = STEP_KEYWORD_TYPES[keyword];
     if (allowedTypes && !allowedTypes.includes(type)) {
@@ -237,8 +235,7 @@ function parseStep(scanner: DslScanner): DslStep {
 
     if (line.startsWith("MAX_TOKENS ")) {
       const raw = line.slice("MAX_TOKENS ".length).trim();
-      // Reject trailing junk like "10abc" that parseInt would silently
-      // truncate to 10.
+      // Reject trailing junk like "10abc" that parseInt would silently truncate.
       if (!/^\d+$/.test(raw)) {
         throw new DslParseError(
           lineNumber,
@@ -665,10 +662,7 @@ function parseWebhook(scanner: DslScanner): DslWebhook {
   return webhook;
 }
 
-/**
- * Parses a DSL string into a structured workflow definition.
- * @throws {DslParseError} on invalid input with line-number context.
- */
+/** @throws {DslParseError} on invalid input, with line-number context. */
 export function parseDsl(dsl: string): ParseDslResult {
   const scanner = new DslScanner(dsl);
   let projectName: string | undefined;

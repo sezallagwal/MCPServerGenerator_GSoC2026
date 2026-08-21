@@ -4,11 +4,7 @@ import { generateFromDsl } from "../../generator/pipeline.js";
 import { generateProject } from "../../generator/project.js";
 import type { WorkflowDefinition } from "../../workflow/types.js";
 
-/**
- * A DESCRIPTION crafted to break out of the generated block comment. The
- * composer validates workflow *names* but not free-text descriptions, so the
- * generator must neutralize the comment terminator itself.
- */
+/** The composer validates names but not descriptions, so the generator must escape them. */
 const HOSTILE_DSL = `
 PROJECT hostile_project
 DESCRIPTION top-level description
@@ -32,9 +28,7 @@ describe("generated code is safe from a hostile DSL description", () => {
   const tool = files.get("src/tools/evil_flow.ts")!;
 
   it("does not let the description escape its block comment", () => {
-    // The first `*/` in the file must be the header comment's own terminator.
-    // If the description's `*/` were left raw it would become the first
-    // terminator and the payload would spill out as code before it.
+    // The first `*/` must be the header's own, or the payload spills out as code before it.
     const terminator = tool.indexOf("*/");
     assert.ok(terminator >= 0, "expected a header comment terminator");
     const header = tool.slice(0, terminator);
@@ -46,8 +40,7 @@ describe("generated code is safe from a hostile DSL description", () => {
   });
 
   it("keeps the description as an inert escaped string literal", () => {
-    // `*/` inside a double-quoted string literal is harmless; JSON.stringify
-    // produces a valid literal for the description field.
+    // `*/` inside a double-quoted literal is harmless, and JSON.stringify produces one.
     assert.ok(
       tool.includes(
         'description: "close comment */ globalThis.PWNED = 2; /* reopen"',
@@ -57,8 +50,7 @@ describe("generated code is safe from a hostile DSL description", () => {
 });
 
 describe("generateProject sanitizes unconstrained workflow names (defense in depth)", () => {
-  // generateProject can be called directly with a WorkflowDefinition that never
-  // passed composer name validation, so it must not trust the name.
+  // generateProject can be handed a definition that never passed composer validation.
   const hostile: WorkflowDefinition = {
     name: 'x"; globalThis.PWNED = 1; //',
     description: "d",

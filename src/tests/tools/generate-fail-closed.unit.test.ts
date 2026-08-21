@@ -3,10 +3,12 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { handleGenerate } from "../../tools/generate.js";
+import { RocketChatAdapter } from "../../platform/rocketchat-adapter.js";
 import type {
   FullEndpoint,
   GetFullEndpointsResult,
 } from "../../parser/types.js";
+import { VALID_DOMAINS } from "../../parser/types.js";
 
 function makeEndpoint(
   operationId: string,
@@ -27,16 +29,22 @@ function makeEndpoint(
   } as unknown as FullEndpoint;
 }
 
-/** Parser stub that resolves a fixed set of endpoints plus an optional correction map. */
-function stubParser(
+/** `handleGenerate` resolves through the adapter, so the stub is injected into a real one. */
+function stubAdapter(
   endpoints: FullEndpoint[],
   correctedIds: Map<string, string> = new Map(),
-) {
-  return {
-    async getFullEndpoints(): Promise<GetFullEndpointsResult> {
-      return { endpoints, correctedIds };
+): RocketChatAdapter {
+  return new RocketChatAdapter({
+    parser: {
+      getAvailableDomains: () => [...VALID_DOMAINS],
+      async listEndpoints() {
+        return [];
+      },
+      async getFullEndpoints(): Promise<GetFullEndpointsResult> {
+        return { endpoints, correctedIds };
+      },
     },
-  };
+  });
 }
 
 const DSL = `
@@ -57,9 +65,10 @@ describe("generate fails closed on unresolved operationIds", () => {
   after(() => rmSync(outputDir, { recursive: true, force: true }));
 
   it("returns an error and writes nothing when an operationId is unknown", async () => {
-    const response = await handleGenerate(stubParser([]), {
+    const response = await handleGenerate({
       dsl: DSL,
       outputDir,
+      adapter: stubAdapter([]),
     });
     assert.ok(
       "isError" in response && response.isError,
@@ -79,12 +88,12 @@ describe("generate rewrites auto-corrected operationIds before generating", () =
   after(() => rmSync(outputDir, { recursive: true, force: true }));
 
   it("embeds the corrected id in both the tool and the endpoint map", async () => {
-    const parser = stubParser(
+    const adapter = stubAdapter(
       [makeEndpoint("channels-history", "GET", "/api/v1/channels.history")],
       new Map([["channels.history", "channels-history"]]),
     );
 
-    const response = await handleGenerate(parser, { dsl: DSL, outputDir });
+    const response = await handleGenerate({ dsl: DSL, outputDir, adapter });
     assert.ok(
       !("isError" in response && response.isError),
       response.content[0].text,

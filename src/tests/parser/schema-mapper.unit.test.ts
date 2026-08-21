@@ -211,6 +211,50 @@ describe("mapOpenApiSchemaToJsonSchema", () => {
     assert.deepStrictEqual(result, { type: "string", format: "binary" });
   });
 
+  it("passes through non-recursive JSON Schema fields and vendor extensions", () => {
+    const result = mapOpenApiSchemaToJsonSchema({
+      type: "object",
+      title: "Channel",
+      readOnly: true,
+      writeOnly: false,
+      deprecated: true,
+      multipleOf: 2,
+      minProperties: 1,
+      maxProperties: 4,
+      const: "fixed",
+      "x-rocketchat-field": true,
+    } as unknown as OpenAPIV3.SchemaObject);
+
+    assert.deepStrictEqual(result, {
+      type: "object",
+      title: "Channel",
+      readOnly: true,
+      writeOnly: false,
+      deprecated: true,
+      multipleOf: 2,
+      minProperties: 1,
+      maxProperties: 4,
+      const: "fixed",
+      "x-rocketchat-field": true,
+    });
+  });
+
+  it("strips OpenAPI-only schema metadata after supported transforms", () => {
+    const result = mapOpenApiSchemaToJsonSchema({
+      type: "string",
+      nullable: true,
+      example: "general",
+      discriminator: { propertyName: "kind" },
+      xml: { name: "channel" },
+      externalDocs: { url: "https://example.com" },
+    } as OpenAPIV3.SchemaObject);
+
+    assert.deepStrictEqual(result, {
+      type: ["string", "null"],
+      examples: ["general"],
+    });
+  });
+
   it("handles oneOf", () => {
     const result = mapOpenApiSchemaToJsonSchema({
       oneOf: [{ type: "string" }, { type: "number" }],

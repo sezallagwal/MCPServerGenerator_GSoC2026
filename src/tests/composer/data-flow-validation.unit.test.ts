@@ -3,12 +3,7 @@ import assert from "node:assert/strict";
 import { validateDataFlowTypes } from "../../composer/validation.js";
 import type { ComposeStepInput } from "../../composer/types.js";
 
-/**
- * These exercise the guard that closes the "plain-text sampling used like JSON"
- * gap: field access is only valid against an object-shaped result. Sampling is a
- * plain-text string unless it is in JSON mode (explicit responseFormat: "json"
- * or JSON intent in the prompt), in which case the runtime parses it to an object.
- */
+/** Field access is only valid on an object, and sampling is plain text unless in JSON mode. */
 describe("validateDataFlowTypes", () => {
   it("rejects field access on a plain-text sampling result", () => {
     const steps: ComposeStepInput[] = [

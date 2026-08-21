@@ -8,10 +8,7 @@ import type {
 } from "../../workflow/executor.js";
 import type { WorkflowDefinition } from "../../workflow/types.js";
 
-/**
- * An api_call step whose operationId is absent from the endpoint map must fail
- * loudly instead of silently issuing a request to an empty `GET` path.
- */
+/** An operationId absent from the map must fail loudly, not request an empty `GET` path. */
 const workflow: WorkflowDefinition = {
   name: "wf",
   description: "d",

@@ -19,15 +19,7 @@ export function extractPath(value: unknown, path: string): unknown {
   }, value);
 }
 
-/**
- * Substitute `{name}` placeholders in an endpoint path with values from the
- * payload, URL-encoding each value and removing the consumed keys so the same
- * values are not also sent as query params (GET) or body fields (writes).
- *
- * OpenAPI path parameters are required by definition, so a placeholder with no
- * usable payload value throws — surfacing a malformed request early instead of
- * sending `/api/apps/public/{app-id}/incoming` verbatim to the server.
- */
+/** Consumed keys are removed so they are not resent; a placeholder with no value throws. */
 function substitutePathParams(
   path: string,
   payload: Record<string, unknown>,
@@ -48,7 +40,6 @@ function substitutePathParams(
   });
 }
 
-/** Build a `path?query` string from a payload for GET requests. */
 function buildGetUrl(path: string, payload: Record<string, unknown>): string {
   const search = new URLSearchParams();
   for (const [k, v] of Object.entries(payload)) {
@@ -61,11 +52,45 @@ function buildGetUrl(path: string, payload: Record<string, unknown>): string {
   return query ? `${path}?${query}` : path;
 }
 
-/**
- * Drop optional params that resolved to empty because their referenced source
- * does not exist; throw when a referenced source exists but is empty/broken so
- * the failure is visible rather than silently producing a bad request.
- */
+/** With no declared locations (offline) the verb decides: GET -> query string, else body. */
+function splitByLocation(
+  endpoint: EndpointInfo,
+  payload: Record<string, unknown>,
+): {
+  headers: Record<string, string>;
+  query: Record<string, unknown>;
+  body: Record<string, unknown>;
+} {
+  const headers: Record<string, string> = {};
+  const query: Record<string, unknown> = {};
+  const body: Record<string, unknown> = {};
+
+  const declaredQuery = new Set(endpoint.queryParams ?? []);
+  const declaredHeader = new Set(endpoint.headerParams ?? []);
+  const isGet = endpoint.method.toUpperCase() === "GET";
+
+  for (const [key, value] of Object.entries(payload)) {
+    if (declaredHeader.has(key)) {
+      // Headers are a flat string channel; objects are serialized so a mistake is visible.
+      if (value !== undefined && value !== null) {
+        headers[key] =
+          typeof value === "object" ? JSON.stringify(value) : String(value);
+      }
+      continue;
+    }
+    if (declaredQuery.has(key)) {
+      query[key] = value;
+      continue;
+    }
+    // Undeclared: fall back to the verb.
+    if (isGet) query[key] = value;
+    else body[key] = value;
+  }
+
+  return { headers, query, body };
+}
+
+/** An absent source drops an optional param; a source that exists but resolved empty throws. */
 function pruneEmptyParams(
   step: ApiCallStep,
   payload: Record<string, unknown>,
@@ -110,8 +135,6 @@ async function callOnce(
 
   pruneEmptyParams(step, payload, state);
 
-  // Replace `{param}` placeholders in the path from the payload and drop those
-  // keys so they are not duplicated into the query string or request body.
   const path = substitutePathParams(rawPath, payload, step.operationId);
 
   if (method === "GET") {
@@ -127,10 +150,21 @@ async function callOnce(
     }
   }
 
+  // Header params have nowhere else to go: by-verb routing put them in the body.
+  const { headers, query, body } = splitByLocation(endpoint, payload);
+
+  const hasQuery = Object.keys(query).length > 0;
+  const sendsBody = method !== "GET" && Object.keys(body).length > 0;
+
   const response = await client.request(
     method,
-    method === "GET" ? buildGetUrl(path, payload) : path,
-    { auth: true, ...(method !== "GET" ? { body: payload } : {}) },
+    hasQuery ? buildGetUrl(path, query) : path,
+    {
+      // Anything the spec has not marked credential-free stays authenticated.
+      auth: endpoint.auth !== false,
+      ...(sendsBody ? { body } : {}),
+      ...(Object.keys(headers).length > 0 ? { headers } : {}),
+    },
   );
 
   if (!response.ok) {
@@ -157,7 +191,6 @@ async function callOnce(
     : response.data;
 }
 
-/** Execute an `api_call` step, including its optional `forEach` fan-out. */
 export async function executeApiCall(
   step: WorkflowStep,
   state: ExecutionState,
@@ -169,9 +202,7 @@ export async function executeApiCall(
 
   if (config.forEach && config.as) {
     const itemVar = config.as;
-    // The composer stores forEach as a bare expression (template braces are
-    // stripped during inference); evaluate it directly. Tolerate residual
-    // `{{ }}` wrapping defensively.
+    // The composer stores forEach bare; residual `{{ }}` is tolerated defensively.
     const expr = config.forEach.trim();
     const cleaned =
       expr.startsWith("{{") && expr.endsWith("}}")
@@ -227,16 +258,14 @@ export async function executeApiCall(
       const summary = failures
         .map((f) => `item ${f.index}: ${f.error}`)
         .join("; ");
-      // Fail-fast (default): a bulk action must not report success when any
-      // side effect failed. Opt into partial success with `continueOnError`.
+      // Default: a bulk action must not report success when any side effect failed.
       if (!config.continueOnError) {
         throw new Error(
           `forEach had ${failures.length}/${collection.length} failed ` +
             `iteration(s): ${summary}`,
         );
       }
-      // Partial success is now explicit: failed items stay `null` in the
-      // result array and the per-item errors are recorded on the step.
+      // Failed items stay `null` and per-item errors are recorded, so this stays explicit.
       state.errors[step.id] =
         `${failures.length}/${collection.length} iteration(s) failed: ${summary}`;
     }

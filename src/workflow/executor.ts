@@ -19,6 +19,11 @@ import { executeSampling } from "./sampling.js";
 export interface EndpointInfo {
   method: string;
   path: string;
+  /** When present, the payload splits by declared location rather than by verb. */
+  queryParams?: string[];
+  headerParams?: string[];
+  /** `false` only for an explicit empty `security: []`. Defaults to authenticated. */
+  auth?: boolean;
 }
 
 export interface ApiResponse {
@@ -33,7 +38,12 @@ export interface WorkflowClient {
   request(
     method: string,
     path: string,
-    options?: { auth?: boolean; body?: Record<string, unknown> },
+    options?: {
+      auth?: boolean;
+      body?: Record<string, unknown>;
+      /** Without this a spec-declared header parameter lands in the query string or body. */
+      headers?: Record<string, string>;
+    },
   ): Promise<ApiResponse>;
 }
 
@@ -80,7 +90,6 @@ export interface RunWorkflowOptions {
   timeoutMs?: number;
   /** Maximum forEach iterations for a single step. Default: 500. */
   maxForEachIterations?: number;
-  /** Cancel the workflow mid-flight. */
   signal?: AbortSignal;
 }
 
@@ -97,7 +106,6 @@ const DEFAULT_MAX_FOREACH = 500;
 
 // ── Dependency analysis ───────────────────────────────────────────────────────
 
-/** Build the transitive ancestor set for every step id. */
 function buildAncestorMap(
   deps: Record<string, string[]>,
 ): Map<string, Set<string>> {
@@ -132,11 +140,7 @@ function markSkipped(state: ExecutionState, id: string): void {
   state.status[id] = "skipped";
 }
 
-/**
- * Decide whether a step is ready to run now. Side effect: marks the step as
- * skipped when a not-taken conditional branch or an all-skipped dependency set
- * means it can never run.
- */
+/** Side effect: marks a step skipped when a not-taken branch means it can never run. */
 function shouldRun(
   id: string,
   state: ExecutionState,
@@ -297,7 +301,6 @@ function validateGraph(workflow: WorkflowDefinition): void {
   }
 }
 
-/** Execute a composed workflow against a client and MCP server. */
 export async function runWorkflow(
   workflow: WorkflowDefinition,
   args: Record<string, unknown>,
@@ -393,8 +396,7 @@ export async function runWorkflow(
         break;
       }
 
-      // Conditional/elicitation steps run alone so branch decisions settle
-      // before dependents are scheduled; everything else runs in parallel.
+      // Conditionals and elicitations run alone, so branch decisions settle first.
       const solo = ready.find(
         (s) =>
           s.config.type === "conditional" || s.config.type === "elicitation",

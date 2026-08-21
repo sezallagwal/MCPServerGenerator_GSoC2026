@@ -2,7 +2,13 @@ import { describe, it, after } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { generateFromDsl } from "../../generator/pipeline.js";
+import {
+  applyPlatformTransforms,
+  composeDsl,
+  deriveEndpoints,
+  generateFromDsl,
+} from "../../generator/pipeline.js";
+import { generateProject } from "../../generator/project.js";
 import { runWorkflow } from "../../workflow/executor.js";
 import type {
   EndpointInfo,
@@ -13,8 +19,11 @@ import type { WorkflowDefinition } from "../../workflow/types.js";
 import type {
   GetFullEndpointsResult,
   FullEndpoint,
+  SpecParserInterface,
 } from "../../parser/types.js";
+import { VALID_DOMAINS } from "../../parser/types.js";
 import { handleGenerate } from "../../tools/generate.js";
+import { RocketChatAdapter } from "../../platform/rocketchat-adapter.js";
 
 const DSL = `
 PROJECT rocketchat_ops
@@ -183,7 +192,11 @@ describe("generate tool writes a project to disk", () => {
     rmSync(outputDir, { recursive: true, force: true });
   });
 
-  const stubParser = {
+  const stubParser: SpecParserInterface = {
+    getAvailableDomains: () => [...VALID_DOMAINS],
+    async listEndpoints() {
+      return [];
+    },
     async getFullEndpoints(): Promise<GetFullEndpointsResult> {
       return {
         endpoints: endpoints.map(
@@ -207,7 +220,11 @@ describe("generate tool writes a project to disk", () => {
   };
 
   it("resolves endpoints, generates, and writes files", async () => {
-    const response = await handleGenerate(stubParser, { dsl: DSL, outputDir });
+    const response = await handleGenerate({
+      dsl: DSL,
+      outputDir,
+      adapter: new RocketChatAdapter({ parser: stubParser }),
+    });
     assert.ok(
       !("isError" in response && response.isError),
       response.content[0].text,
@@ -224,5 +241,91 @@ describe("generate tool writes a project to disk", () => {
 
     const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
     assert.equal(pkg.name, "rocketchat_ops");
+  });
+});
+
+describe("generateProject leaves its caller's workflows alone", () => {
+  /** Generation used to mutate the caller's steps; additive needs repeated runs to match. */
+  it("does not mutate the composed workflows, and repeats identically", () => {
+    // Needs an operation the resilience policy annotates, or cloning goes untested.
+    const composed = composeDsl(`PROJECT purity
+DESCRIPTION purity
+
+WORKFLOW mk
+  DESCRIPTION create a room
+  STEP create : api_call
+    OPERATION post-api-v1-channels_create
+    MAP name = demo
+`);
+    const adapter = new RocketChatAdapter();
+    applyPlatformTransforms(composed.workflows, adapter);
+    const before = JSON.stringify(composed.workflows);
+    assert.ok(
+      adapter.shouldContinueOnError("post-api-v1-channels_create"),
+      "precondition: the policy must have something to annotate",
+    );
+
+    const purityEndpoints = deriveEndpoints(composed.workflows, adapter);
+    const first = generateProject({
+      serverName: "purity",
+      workflows: composed.workflows,
+      endpoints: purityEndpoints,
+      adapter: new RocketChatAdapter(),
+    });
+
+    assert.equal(
+      JSON.stringify(composed.workflows),
+      before,
+      "the caller's workflow objects must come back unchanged",
+    );
+
+    const second = generateProject({
+      serverName: "purity",
+      workflows: composed.workflows,
+      endpoints: purityEndpoints,
+      adapter: new RocketChatAdapter(),
+    });
+
+    assert.deepEqual(
+      second.files.map((f) => `${f.path}:${f.content.length}`),
+      first.files.map((f) => `${f.path}:${f.content.length}`),
+      "repeated generation from the same input must be byte-stable",
+    );
+    for (let i = 0; i < first.files.length; i++) {
+      assert.equal(second.files[i].content, first.files[i].content);
+    }
+  });
+
+  it("still applies the resilience policy to the emitted output", () => {
+    const composed = composeDsl(`PROJECT policy
+DESCRIPTION policy
+
+WORKFLOW mk
+  DESCRIPTION create then wipe
+  STEP create : api_call
+    OPERATION post-api-v1-channels_create
+    MAP name = demo
+  STEP wipe : api_call
+    OPERATION post-api-v1-rooms_cleanHistory
+    DEPENDS ON create
+    MAP roomId = GENERAL
+`);
+    const adapter = new RocketChatAdapter();
+    applyPlatformTransforms(composed.workflows, adapter);
+    const result = generateProject({
+      serverName: "policy",
+      workflows: composed.workflows,
+      endpoints: deriveEndpoints(composed.workflows, adapter),
+      adapter,
+    });
+    const tool = result.files.find((f) => f.path === "src/tools/mk.ts");
+    assert.ok(tool);
+    // Exactly one tolerated step: the create. A failed history wipe must abort.
+    assert.equal(
+      (tool.content.match(/continueOnError/g) ?? []).length,
+      1,
+      "cloning the input must not drop the policy from the emitted tool",
+    );
+    assert.match(tool.content, /channels_create[\s\S]{0,200}?continueOnError/);
   });
 });

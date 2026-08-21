@@ -1,6 +1,24 @@
 import type { OpenAPIV3 } from "openapi-types";
 import type { JSONSchema7, JSONSchema7TypeName } from "json-schema";
 
+const OPENAPI_ONLY_KEYS = new Set([
+  "nullable",
+  "discriminator",
+  "xml",
+  "externalDocs",
+  "example",
+]);
+
+const RECURSIVE_KEYS = new Set([
+  "properties",
+  "additionalProperties",
+  "items",
+  "allOf",
+  "anyOf",
+  "oneOf",
+  "not",
+]);
+
 export function mapOpenApiSchemaToJsonSchema(
   schema: OpenAPIV3.SchemaObject | OpenAPIV3.ReferenceObject,
   seen: WeakSet<object> = new WeakSet(),
@@ -25,85 +43,44 @@ export function mapOpenApiSchemaToJsonSchema(
   seen.add(schema);
 
   try {
-    const jsonSchema: JSONSchema7 = {};
-
-    if (schema.type) {
-      jsonSchema.type = schema.type as JSONSchema7TypeName;
-    }
-
-    if (schema.description) {
-      jsonSchema.description = schema.description;
-    }
-
-    if (schema.format) {
-      jsonSchema.format = schema.format;
+    const jsonSchema: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(schema)) {
+      if (OPENAPI_ONLY_KEYS.has(key) || RECURSIVE_KEYS.has(key)) continue;
+      jsonSchema[key] = value;
     }
 
     if (schema.nullable && typeof jsonSchema.type === "string") {
       jsonSchema.type = [jsonSchema.type as JSONSchema7TypeName, "null"];
     }
 
-    if (schema.enum) {
-      jsonSchema.enum = schema.enum;
+    const schemaAny = schema as Record<string, unknown>;
+    if (schemaAny.example !== undefined) {
+      const existing = Array.isArray(schemaAny.examples)
+        ? schemaAny.examples
+        : [];
+      jsonSchema.examples = [schemaAny.example, ...existing];
     }
 
-    if (schema.default !== undefined) {
-      jsonSchema.default = schema.default;
+    if (typeof jsonSchema.exclusiveMinimum !== "number") {
+      delete jsonSchema.exclusiveMinimum;
     }
-
-    if (schema.minimum !== undefined) jsonSchema.minimum = schema.minimum;
-    if (schema.maximum !== undefined) jsonSchema.maximum = schema.maximum;
-
-    const schemaExtensions = schema as unknown as {
-      exclusiveMinimum?: unknown;
-      exclusiveMaximum?: unknown;
-      example?: unknown;
-      examples?: unknown;
-    };
-
-    if (typeof schemaExtensions.exclusiveMinimum === "number") {
-      jsonSchema.exclusiveMinimum = schemaExtensions.exclusiveMinimum;
-    }
-    if (typeof schemaExtensions.exclusiveMaximum === "number") {
-      jsonSchema.exclusiveMaximum = schemaExtensions.exclusiveMaximum;
-    }
-
-    if (schema.minLength !== undefined) jsonSchema.minLength = schema.minLength;
-    if (schema.maxLength !== undefined) jsonSchema.maxLength = schema.maxLength;
-    if (schema.pattern !== undefined) jsonSchema.pattern = schema.pattern;
-
-    if (schema.minItems !== undefined) jsonSchema.minItems = schema.minItems;
-    if (schema.maxItems !== undefined) jsonSchema.maxItems = schema.maxItems;
-    if (schema.uniqueItems !== undefined) {
-      jsonSchema.uniqueItems = schema.uniqueItems;
-    }
-
-    if (schemaExtensions.example !== undefined) {
-      jsonSchema.examples = [
-        schemaExtensions.example,
-      ] as JSONSchema7["examples"];
-    }
-    if (schemaExtensions.examples !== undefined) {
-      jsonSchema.examples =
-        schemaExtensions.examples as JSONSchema7["examples"];
+    if (typeof jsonSchema.exclusiveMaximum !== "number") {
+      delete jsonSchema.exclusiveMaximum;
     }
 
     if (schema.type === "object" && schema.properties) {
       jsonSchema.properties = {};
       for (const [key, propSchema] of Object.entries(schema.properties)) {
         if (typeof propSchema === "object" && propSchema !== null) {
-          jsonSchema.properties[key] = mapOpenApiSchemaToJsonSchema(
-            propSchema as OpenAPIV3.SchemaObject,
-            seen,
-            maxDepth,
-            currentDepth + 1,
-          );
+          (jsonSchema.properties as Record<string, JSONSchema7>)[key] =
+            mapOpenApiSchemaToJsonSchema(
+              propSchema as OpenAPIV3.SchemaObject,
+              seen,
+              maxDepth,
+              currentDepth + 1,
+            );
         }
       }
-    }
-
-    if (schema.required) {
-      jsonSchema.required = schema.required;
     }
 
     if (schema.additionalProperties !== undefined) {
@@ -131,28 +108,9 @@ export function mapOpenApiSchemaToJsonSchema(
       );
     }
 
-    if (schema.oneOf) {
-      jsonSchema.oneOf = schema.oneOf.map((s) =>
-        mapOpenApiSchemaToJsonSchema(
-          s as OpenAPIV3.SchemaObject,
-          seen,
-          maxDepth,
-          currentDepth,
-        ),
-      );
-    }
-    if (schema.anyOf) {
-      jsonSchema.anyOf = schema.anyOf.map((s) =>
-        mapOpenApiSchemaToJsonSchema(
-          s as OpenAPIV3.SchemaObject,
-          seen,
-          maxDepth,
-          currentDepth,
-        ),
-      );
-    }
-    if (schema.allOf) {
-      jsonSchema.allOf = schema.allOf.map((s) =>
+    for (const key of ["oneOf", "anyOf", "allOf"] as const) {
+      if (!schema[key]) continue;
+      jsonSchema[key] = schema[key].map((s) =>
         mapOpenApiSchemaToJsonSchema(
           s as OpenAPIV3.SchemaObject,
           seen,
@@ -162,7 +120,16 @@ export function mapOpenApiSchemaToJsonSchema(
       );
     }
 
-    return jsonSchema;
+    if (typeof schemaAny.not === "object" && schemaAny.not !== null) {
+      jsonSchema.not = mapOpenApiSchemaToJsonSchema(
+        schemaAny.not as OpenAPIV3.SchemaObject,
+        seen,
+        maxDepth,
+        currentDepth,
+      );
+    }
+
+    return jsonSchema as JSONSchema7;
   } finally {
     seen.delete(schema);
   }

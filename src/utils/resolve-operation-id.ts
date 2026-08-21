@@ -5,8 +5,8 @@ export interface OperationIdMatch {
 }
 
 /**
- * Resolve an operationId through exact, separator-normalized, then fuzzy matching.
- * Fuzzy matching strips separators, uses the closest candidate with edit distance <= 2, and is skipped for short normalized IDs to avoid false positives on compact APIs.
+ * Exact, then separator-normalized, then fuzzy at edit distance <= 2. Fuzzy is skipped for
+ * short ids, where it produces false positives on compact APIs.
  */
 export function resolveOperationId(
   requested: string,

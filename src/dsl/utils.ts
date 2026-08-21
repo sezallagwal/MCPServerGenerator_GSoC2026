@@ -1,10 +1,6 @@
 import { DslParseError } from "./types.js";
 
-/**
- * Object keys that can corrupt the prototype chain when assigned dynamically.
- * These are rejected in MAP paths and MAP values to prevent prototype
- * pollution in the generated input payloads.
- */
+/** Rejected in MAP paths and values, to keep prototype pollution out of input payloads. */
 const FORBIDDEN_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 
 function assertSafeKey(key: string, lineNumber: number): void {
@@ -22,11 +18,7 @@ function assertSafeKey(key: string, lineNumber: number): void {
   }
 }
 
-/**
- * Recursively rejects reserved keys anywhere inside a parsed MAP value, so a
- * JSON literal like {"__proto__": {...}} cannot smuggle a prototype-pollution
- * payload past the dot-path check.
- */
+/** Recursive, so a JSON literal cannot smuggle `__proto__` past the dot-path check. */
 export function assertNoReservedKeys(value: unknown, lineNumber: number): void {
   if (Array.isArray(value)) {
     for (const item of value) assertNoReservedKeys(item, lineNumber);

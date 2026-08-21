@@ -4,11 +4,11 @@ import { SpecParser } from "../../parser/index.js";
 import type { Domain, SpecSource } from "../../parser/index.js";
 import type { OpenAPIV3 } from "openapi-types";
 
-function makeSpec(): OpenAPIV3.Document {
+function makeSpec(paths?: OpenAPIV3.PathsObject): OpenAPIV3.Document {
   return {
     openapi: "3.0.0",
     info: { title: "Injected", version: "1.0.0" },
-    paths: {
+    paths: paths ?? {
       "/api/v1/login": {
         post: {
           operationId: "post-api-v1-login",
@@ -20,6 +20,20 @@ function makeSpec(): OpenAPIV3.Document {
       },
     },
   };
+}
+
+function makeMessagingSpec(): OpenAPIV3.Document {
+  return makeSpec({
+    "/api/v1/chat.postMessage": {
+      post: {
+        operationId: "send-message",
+        summary: "Send message",
+        responses: {
+          "200": { description: "OK" },
+        },
+      },
+    },
+  });
 }
 
 describe("SpecParser", () => {
@@ -41,6 +55,8 @@ describe("SpecParser", () => {
         operationId: "post-api-v1-login",
         summary: "Injected login",
         domain: "authentication",
+        path: "/api/v1/login",
+        method: "post",
       },
     ]);
   });
@@ -63,7 +79,68 @@ describe("SpecParser", () => {
         operationId: "post-api-v1-login",
         summary: "Injected login",
         domain: "messaging",
+        path: "/api/v1/login",
+        method: "post",
       },
     ]);
+  });
+
+  it("uses indexed locations when getFullEndpoints follows listEndpoints", async () => {
+    const requestedDomains: Domain[] = [];
+    const specSource: SpecSource = {
+      async getSpec(domain) {
+        requestedDomains.push(domain);
+        return makeSpec();
+      },
+    };
+
+    const parser = new SpecParser({ specSource });
+    await parser.listEndpoints(["authentication"]);
+    requestedDomains.length = 0;
+
+    const result = await parser.getFullEndpoints(["post-api-v1-login"]);
+
+    assert.deepStrictEqual(requestedDomains, ["authentication"]);
+    assert.deepStrictEqual(
+      result.endpoints.map((endpoint) => ({
+        operationId: endpoint.operationId,
+        domain: endpoint.domain,
+        path: endpoint.path,
+        method: endpoint.method,
+      })),
+      [
+        {
+          operationId: "post-api-v1-login",
+          domain: "authentication",
+          path: "/api/v1/login",
+          method: "POST",
+        },
+      ],
+    );
+  });
+
+  it("falls back for unindexed IDs while reusing cached indexed specs", async () => {
+    const requestedDomains: Domain[] = [];
+    const specSource: SpecSource = {
+      async getSpec(domain) {
+        requestedDomains.push(domain);
+        return domain === "messaging" ? makeMessagingSpec() : makeSpec();
+      },
+    };
+
+    const parser = new SpecParser({ specSource });
+    await parser.listEndpoints(["authentication"]);
+    requestedDomains.length = 0;
+
+    const result = await parser.getFullEndpoints(
+      ["post-api-v1-login", "send-message"],
+      ["authentication", "messaging"],
+    );
+
+    assert.deepStrictEqual(requestedDomains, ["authentication", "messaging"]);
+    assert.deepStrictEqual(
+      result.endpoints.map((endpoint) => endpoint.operationId).sort(),
+      ["post-api-v1-login", "send-message"],
+    );
   });
 });

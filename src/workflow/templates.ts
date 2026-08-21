@@ -5,19 +5,9 @@ import {
 } from "./expression-security.js";
 
 /**
- * SECURITY MODEL
- * --------------
- * The security boundary for workflow expressions is the AST allowlist in
- * `expression-security.ts` (`validateSafeExpression`), NOT Node's `vm` module.
- * `node:vm` is explicitly documented as *not* a sandbox for untrusted code — a
- * determined expression can reach the host realm. Every expression is therefore
- * statically validated against the allowlist *before* it is passed to the VM;
- * the VM only adds a wall-clock `timeout` as defense-in-depth.
- *
- * The timeout interrupts synchronous CPU loops but does NOT bound memory. Inputs
- * are expected to be author/AI-generated and validated, not adversarial. If this
- * engine is ever exposed to untrusted expression authors, replace `vm` with a
- * hard-isolation runtime (e.g. `isolated-vm`) and add a memory limit.
+ * The security boundary is the AST allowlist in `expression-security.ts`, NOT `node:vm`,
+ * which is documented as not a sandbox; the VM only adds a wall-clock timeout. Memory is
+ * unbounded, so untrusted expression authors would need a hard-isolation runtime instead.
  */
 
 const VM_TIMEOUT_MS = 250;
@@ -76,12 +66,7 @@ function isValidName(name: string): boolean {
   return /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(name) && !JS_RESERVED.has(name);
 }
 
-/**
- * Build the prototype-less sandbox object exposed to an expression. Params and
- * forEach locals are spread in as bare identifiers so authors can write
- * `roomName` instead of `params.roomName`, while `params` and `steps` remain
- * available for fully-qualified access.
- */
+/** Prototype-less. Params and forEach locals are also spread in as bare identifiers. */
 function buildSandbox(params: Scope, steps: Scope, locals: Scope = {}): Scope {
   const sandbox: Scope = Object.create(null);
   sandbox.params = params;
@@ -133,7 +118,6 @@ function runInSandbox(code: string, sandbox: Scope): unknown {
   return vm.runInNewContext(code, sandbox, { timeout: VM_TIMEOUT_MS });
 }
 
-/** Evaluate a single expression and return its native value. */
 export function evaluateExpression(
   expr: string,
   params: Scope,
@@ -149,11 +133,7 @@ export function evaluateExpression(
   return runInSandbox(`"use strict"; (${expr});`, sandbox);
 }
 
-/**
- * Evaluate a transform block. A bare expression is tried first; if it is not a
- * valid expression (e.g. it contains statements or a trailing object literal),
- * the block is auto-wrapped with a `return` and run inside an IIFE.
- */
+/** A bare expression is tried first, then re-run wrapped in an IIFE with a `return`. */
 export function evaluateExpressionBlock(
   expr: string,
   params: Scope,
@@ -175,7 +155,6 @@ export function evaluateExpressionBlock(
   }
 }
 
-/** Evaluate a condition expression to a boolean. */
 export function evaluateCondition(
   expr: string,
   params: Scope,
@@ -186,11 +165,7 @@ export function evaluateCondition(
   return runInSandbox(`"use strict"; !!(${expr});`, sandbox) as boolean;
 }
 
-/**
- * Locate the `}}` that closes a `{{ ... }}` placeholder starting at `from` (the
- * first character after the opening `{{`). Tracks brace depth and skips string
- * literals so braces inside the embedded expression do not terminate early.
- */
+/** Tracks brace depth and skips string literals, so an inner brace cannot close early. */
 function findTemplateClose(
   s: string,
   from: number,
@@ -235,12 +210,7 @@ function findTemplateClose(
   return null;
 }
 
-/**
- * Normalize the template escape forms before evaluation:
- *  - bracket-wrapped refs `{{[params.x]}}` → `{{params.x}}`
- *  - over-braced `{{{ ... }}}` (3+) → `{{ ... }}`
- * Idempotent.
- */
+/** Normalize `{{[params.x]}}` and `{{{ ... }}}` down to `{{ ... }}`. Idempotent. */
 function cleanTemplate(template: string): string {
   return template
     .replace(/\{\{\[params\.([^\]]+)\]\}\}/g, "{{params.$1}}")
@@ -248,11 +218,7 @@ function cleanTemplate(template: string): string {
     .replace(/\{{3,}([^}]+)\}{3,}/g, "{{$1}}");
 }
 
-/**
- * If `cleaned` is a single placeholder spanning the entire string, return the
- * inner expression; otherwise `null`. Used to decide whether a value can keep
- * its native (non-string) type.
- */
+/** The inner expression when one placeholder spans the whole string, else `null`. */
 function soleExpression(cleaned: string): string | null {
   if (!cleaned.startsWith("{{")) return null;
   const close = findTemplateClose(cleaned, 2);
@@ -262,7 +228,6 @@ function soleExpression(cleaned: string): string | null {
   return null;
 }
 
-/** Resolve every `{{ ... }}` placeholder in a string to its stringified value. */
 export function resolveTemplate(
   template: string,
   params: Scope,
@@ -311,10 +276,8 @@ export function resolveTemplate(
 }
 
 /**
- * Resolve a value of any shape. Strings containing a single whole-string
- * placeholder keep their native evaluated type; mixed strings interpolate to a
- * string (parsed back only when the whole result is a JSON container). Arrays
- * and objects are resolved recursively.
+ * A whole-string placeholder keeps its native type; a mixed string interpolates. Arrays
+ * and objects resolve recursively.
  */
 export function resolveValue(
   value: unknown,
@@ -352,7 +315,6 @@ export function resolveValue(
   return value;
 }
 
-/** Resolve every value in a mapping object. */
 export function resolveMapping(
   mapping: Scope,
   params: Scope,

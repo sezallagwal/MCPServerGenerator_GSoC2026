@@ -2,8 +2,11 @@ import { composeWorkflowDefinition } from "../composer/index.js";
 import type { ComposerWarning } from "../composer/types.js";
 import { parseDsl } from "../dsl/index.js";
 import type { WorkflowDefinition } from "../workflow/types.js";
+import type { PlatformAdapter } from "../platform/adapter.js";
+import { RocketChatAdapter } from "../platform/rocketchat-adapter.js";
 import { dslWorkflowToComposeInput } from "./dsl-mapping.js";
 import { generateProject } from "./project.js";
+import type { Transport } from "./codegen.js";
 import type { GeneratorEndpoint, GenerateProjectResult } from "./types.js";
 
 export interface ComposeDslResult {
@@ -13,7 +16,6 @@ export interface ComposeDslResult {
   warnings: ComposerWarning[];
 }
 
-/** Parse a DSL document and compose every workflow it declares. */
 export function composeDsl(dsl: string): ComposeDslResult {
   const parsed = parseDsl(dsl);
   const workflows: WorkflowDefinition[] = [];
@@ -33,11 +35,57 @@ export function composeDsl(dsl: string): ComposeDslResult {
   };
 }
 
+/** Must run before endpoints resolve: a remap changes which operationIds the map must cover. */
+export function applyPlatformTransforms(
+  workflows: WorkflowDefinition[],
+  adapter: PlatformAdapter,
+): void {
+  adapter.normalizeOperations(workflows);
+}
+
+/** Offline registry from operationIds alone. Fails closed: a guessed route only fails live. */
+export function deriveEndpoints(
+  workflows: WorkflowDefinition[],
+  adapter: PlatformAdapter,
+): GeneratorEndpoint[] {
+  const ids = new Set<string>();
+  for (const workflow of workflows) {
+    for (const id of workflow.requiredEndpoints) {
+      if (id) ids.add(id);
+    }
+  }
+
+  const endpoints: GeneratorEndpoint[] = [];
+  const unresolved: string[] = [];
+  for (const operationId of ids) {
+    const derived = adapter.deriveEndpointFromOperationId(operationId);
+    if (!derived) {
+      unresolved.push(operationId);
+      continue;
+    }
+    endpoints.push({ operationId, ...derived });
+  }
+
+  if (unresolved.length > 0) {
+    throw new Error(
+      `Cannot derive endpoints for ${unresolved.length} operationId(s) against ` +
+        `${adapter.platformName}: ${unresolved.join(", ")}. ` +
+        `Fix the OPERATION lines in the DSL, or pass a resolved endpoint list.`,
+    );
+  }
+
+  return endpoints;
+}
+
 export interface GenerateFromDslOptions {
-  /** Endpoint registry for every operationId the workflows call. */
-  endpoints: GeneratorEndpoint[];
+  /** Derived from the operationIds through the adapter when omitted. */
+  endpoints?: GeneratorEndpoint[];
   /** Override the server name (defaults to the DSL PROJECT name). */
   serverName?: string;
+  /** Target platform. Defaults to {@link RocketChatAdapter}. */
+  adapter?: PlatformAdapter;
+  /** Transport the generated server should serve on. Defaults to `stdio`. */
+  transport?: Transport;
 }
 
 export interface GenerateFromDslResult extends GenerateProjectResult {
@@ -47,13 +95,22 @@ export interface GenerateFromDslResult extends GenerateProjectResult {
 /** Full pipeline: DSL text -> parsed -> composed -> generated project files. */
 export function generateFromDsl(
   dsl: string,
-  options: GenerateFromDslOptions,
+  options: GenerateFromDslOptions = {},
 ): GenerateFromDslResult {
+  const adapter = options.adapter ?? new RocketChatAdapter();
   const composed = composeDsl(dsl);
+
+  applyPlatformTransforms(composed.workflows, adapter);
+
+  const endpoints =
+    options.endpoints ?? deriveEndpoints(composed.workflows, adapter);
+
   const result = generateProject({
     serverName: options.serverName ?? composed.projectName,
     workflows: composed.workflows,
-    endpoints: options.endpoints,
+    endpoints,
+    adapter,
+    transport: options.transport,
   });
   return { ...result, warnings: composed.warnings };
 }

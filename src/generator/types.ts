@@ -1,31 +1,42 @@
 import type { WorkflowDefinition } from "../workflow/types.js";
+import type { Transport } from "./codegen.js";
+import type { PlatformAdapter } from "../platform/adapter.js";
 
-/** A single file in a generated project, with a project-relative POSIX path. */
+/** `path` is project-relative, with POSIX separators. */
 export interface GeneratedFile {
   path: string;
   content: string;
 }
 
-/** Minimal endpoint record the generator needs to build the endpoint map. */
 export interface GeneratorEndpoint {
   operationId: string;
   method: string;
   path: string;
   summary?: string;
+  /** From the spec, so the engine places values by declaration, not by verb. Absent offline. */
+  queryParams?: string[];
+  headerParams?: string[];
+  /** `false` when the spec says this operation needs no credentials. */
+  auth?: boolean;
 }
 
 export interface GenerateProjectInput {
-  /** Lowercase project/server name (e.g. "rocketchat_ops"). */
+  /** Lowercase, e.g. "rocketchat_ops". */
   serverName: string;
   workflows: WorkflowDefinition[];
   endpoints: GeneratorEndpoint[];
+  /** Defaults to {@link RocketChatAdapter}. */
+  adapter?: PlatformAdapter;
+  /** Defaults to `stdio`. */
+  transport?: Transport;
 }
 
-/** Result of generating a project: the file set plus a short summary. */
 export interface GenerateProjectResult {
   files: GeneratedFile[];
   summary: {
     serverName: string;
+    platformName: string;
+    transport: Transport;
     workflowCount: number;
     endpointCount: number;
     usesSampling: boolean;

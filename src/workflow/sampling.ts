@@ -2,10 +2,7 @@ import type { SamplingStep, WorkflowStep } from "./types.js";
 import type { ExecutionState, WorkflowServer } from "./executor.js";
 import { resolveTemplate } from "./templates.js";
 
-/**
- * True when the prompt/systemPrompt signal that the model should respond with
- * JSON. Shared heuristic so runtime parsing and compose-time validation agree.
- */
+/** Shared heuristic, so runtime parsing and compose-time validation cannot disagree. */
 export function detectJsonIntent(step: {
   prompt?: string;
   systemPrompt?: string;
@@ -19,10 +16,7 @@ export function detectJsonIntent(step: {
   );
 }
 
-/**
- * Find the bracket that closes the JSON value opened at `start`, tracking depth
- * and skipping string literals. Returns -1 when no balanced closer exists.
- */
+/** Tracks depth and skips string literals; -1 when no balanced closer exists. */
 function matchingClose(s: string, start: number): number {
   let depth = 0;
   let inStr = false;
@@ -91,7 +85,6 @@ function buildPrompt(config: SamplingStep, state: ExecutionState): string {
   return prompt;
 }
 
-/** Execute a `sampling` step via the MCP server's `createMessage`. */
 export async function executeSampling(
   step: WorkflowStep,
   state: ExecutionState,

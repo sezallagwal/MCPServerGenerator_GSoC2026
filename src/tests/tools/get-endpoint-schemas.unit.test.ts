@@ -364,6 +364,62 @@ describe("handleGetEndpointSchemas", () => {
     assert.deepStrictEqual(json.endpoints, result.structuredContent.endpoints);
   });
 
+  it("passes through endpoint metadata, examples, and error responses", async () => {
+    const parser: EndpointDetailSource = {
+      getFullEndpoints: async () => ({
+        endpoints: [
+          makeEndpoint({
+            deprecated: true,
+            requestExamples: {
+              default: { name: "general" },
+            },
+            responseExamples: {
+              ok: { value: { success: true } },
+            },
+            errorResponses: {
+              "400": {
+                description: "Invalid request",
+                schema: {
+                  type: "object",
+                  properties: {
+                    error: { type: "string" },
+                  },
+                },
+              },
+            },
+          }),
+        ],
+        correctedIds: new Map<string, string>(),
+      }),
+    };
+
+    const result = await handleGetEndpointSchemas(parser, [
+      "get-api-v1-channels_list",
+    ]);
+    const json = parseToolJson(result);
+    const endpoints = json.endpoints as Record<string, Record<string, unknown>>;
+    const endpoint = endpoints["get-api-v1-channels_list"];
+
+    assert.equal(endpoint.deprecated, true);
+    assert.deepStrictEqual(endpoint.requestExamples, {
+      default: { name: "general" },
+    });
+    assert.deepStrictEqual(endpoint.responseExamples, {
+      ok: { value: { success: true } },
+    });
+    assert.deepStrictEqual(endpoint.errorResponses, {
+      "400": {
+        description: "Invalid request",
+        schema: {
+          type: "object",
+          properties: {
+            error: { type: "string" },
+          },
+        },
+      },
+    });
+  });
+
   it("returns an error response when schema lookup fails", async () => {
     const parser: EndpointDetailSource = {
       getFullEndpoints: async () => {

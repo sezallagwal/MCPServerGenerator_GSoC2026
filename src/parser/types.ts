@@ -23,7 +23,21 @@ export const INPUT_SCHEMA_BODY_KEY = "requestBody" as const;
 export interface CompactEndpoint {
   operationId: string;
   summary: string;
+  /** A plain string, not {@link Domain}: a generic spec groups by its own tags. */
+  domain: string;
+}
+
+export interface OperationLocation {
   domain: Domain;
+  path: string;
+  method: string;
+}
+
+/** Only the Rocket.Chat path produces it, so `domain` narrows back to a {@link Domain}. */
+export interface IndexedCompactEndpoint extends CompactEndpoint {
+  domain: Domain;
+  path: string;
+  method: string;
 }
 
 export interface EndpointParameterSchemas {
@@ -38,7 +52,8 @@ export interface FullEndpoint {
   path: string;
   summary: string;
   description: string;
-  domain: Domain;
+  /** Spec grouping — a {@link Domain} for Rocket.Chat, an OpenAPI tag otherwise. */
+  domain: string;
   parameters: OpenAPIV3.ParameterObject[];
   requestBody?: {
     contentType: string;
@@ -46,6 +61,13 @@ export interface FullEndpoint {
     required: boolean;
   };
   responseSchema?: JSONSchema7;
+  deprecated?: boolean;
+  requestExamples?: Record<string, unknown>;
+  responseExamples?: Record<string, unknown>;
+  errorResponses?: Record<
+    string,
+    { description: string; schema?: JSONSchema7 }
+  >;
   security: OpenAPIV3.SecurityRequirementObject[];
   inputSchema: JSONSchema7;
   parameterSchemas: EndpointParameterSchemas;
@@ -56,15 +78,16 @@ export interface GetFullEndpointsResult {
   correctedIds: ReadonlyMap<string, string>;
 }
 
+/** Domains are plain strings: a generic spec groups by its own tags, so implementations check. */
 export interface CapabilityGuideSource {
-  getAvailableDomains(): Domain[];
-  listEndpoints(domains: readonly Domain[]): Promise<CompactEndpoint[]>;
+  getAvailableDomains(): string[];
+  listEndpoints(domains: readonly string[]): Promise<CompactEndpoint[]>;
 }
 
 export interface EndpointDetailSource {
   getFullEndpoints(
     operationIds: string[],
-    domains?: Domain[],
+    domains?: readonly string[],
     maxDepth?: number,
   ): Promise<GetFullEndpointsResult>;
 }

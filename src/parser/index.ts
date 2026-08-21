@@ -4,6 +4,8 @@ export { ParserError, VALID_DOMAINS, INPUT_SCHEMA_BODY_KEY } from "./types.js";
 export type {
   Domain,
   CompactEndpoint,
+  IndexedCompactEndpoint,
+  OperationLocation,
   EndpointParameterSchemas,
   FullEndpoint,
   GetFullEndpointsResult,

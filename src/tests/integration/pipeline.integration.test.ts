@@ -1,12 +1,4 @@
-/**
- * End-to-end integration tests for the full pipeline: DSL string -> generated project.
- *
- * Verifies that:
- * 1. The DSL parser produces valid structures
- * 2. The composer validates and transforms workflows
- * 3. The code generator produces valid TypeScript files
- * 4. The generated project structure is complete
- */
+/** End to end: DSL string -> parsed -> composed -> generated project. */
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";

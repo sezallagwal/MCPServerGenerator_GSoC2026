@@ -8,12 +8,8 @@ export interface ApiCallStep {
   forEach?: string;
   as?: string;
   /**
-   * forEach failure policy. When omitted or `false`, the step fails (and the
-   * workflow errors) if any iteration fails — the safe default for bulk
-   * side-effecting actions like archive/delete/post. When `true`, iterations
-   * continue on failure: failed items are recorded as `null` in the result
-   * array and the per-item errors are surfaced on the step so partial success
-   * is explicit rather than silent.
+   * Omitted or `false`: a failed iteration fails the step, the safe default for bulk side
+   * effects. `true`: failed items become `null` and the per-item errors surface.
    */
   continueOnError?: boolean;
 }
